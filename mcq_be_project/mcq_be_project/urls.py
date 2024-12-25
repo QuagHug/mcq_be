@@ -20,6 +20,7 @@ from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
 )
+from django.views.decorators.csrf import csrf_exempt
 
 urlpatterns = [
     path('api/', include('mcq_be_app.urls')),

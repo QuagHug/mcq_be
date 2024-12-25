@@ -47,14 +47,14 @@ class QuestionBank(models.Model):
         return self.name
 
 class Question(models.Model):
-    question_bank = models.ForeignKey(QuestionBank, on_delete=models.CASCADE)
     question_text = models.TextField()
     image_url = models.URLField(null=True, blank=True)
+    question_bank = models.ForeignKey('QuestionBank', related_name='questions', on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.question_text[:50]
+        return self.question_text
 
 class Answer(models.Model):
     question = models.ForeignKey(Question, related_name='answers', on_delete=models.CASCADE)
@@ -66,6 +66,36 @@ class Answer(models.Model):
 
     def __str__(self):
         return self.answer_text[:50]
+
+class Taxonomy(models.Model):
+    name = models.CharField(max_length=255)
+    description = models.TextField(null=True, blank=True)
+    category = models.CharField(max_length=255)
+    levels = models.JSONField(default=list)  # Store levels as JSON array
+
+    def __str__(self):
+        return self.name
+
+class QuestionTaxonomy(models.Model):
+    DIFFICULTY_CHOICES = [
+        ('easy', 'Easy'),
+        ('medium', 'Medium'),
+        ('hard', 'Hard'),
+    ]
+    
+    question = models.ForeignKey('Question', on_delete=models.CASCADE, related_name='taxonomies')
+    taxonomy = models.ForeignKey('Taxonomy', on_delete=models.CASCADE, related_name='questions')
+    level = models.CharField(max_length=255)
+    difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES, default='medium')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('question', 'taxonomy')
+
+    def __str__(self):
+        return f"{self.question.question_text[:30]} - {self.taxonomy.name} (Level: {self.level}, Difficulty: {self.difficulty})"
+
 admin.site.register(QuestionBank)
 admin.site.register(Question)
 admin.site.register(Answer)

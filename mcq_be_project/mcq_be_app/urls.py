@@ -9,4 +9,7 @@ urlpatterns = [
     path('courses/<int:course_id>/question-banks/<int:pk>/', views.question_bank_detail, name='question-bank-detail'),
     path('courses/<int:course_id>/question-banks/<int:bank_id>/questions/', views.question_list, name='question-list'),
     path('courses/<int:course_id>/question-banks/<int:bank_id>/questions/<int:pk>/', views.question_detail, name='question-detail'),
+    path('courses/<int:course_id>/question-banks/<int:bank_id>/questions/bulk/', 
+         views.question_bulk_create, 
+         name='question-bulk-create'),
 ]

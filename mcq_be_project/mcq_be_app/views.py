@@ -6,9 +6,10 @@ from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes
-from .models import QuestionBank, Question, Answer, Course
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy
 from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer
 import uuid
+from django.db import transaction
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -99,7 +100,7 @@ def question_list(request, course_id, bank_id):
         serializer = QuestionSerializer(data=data)
         if serializer.is_valid():
             question = serializer.save(question_bank=question_bank)
-            
+        
             # Create answers
             for answer_data in answers_data:
                 Answer.objects.create(question=question, **answer_data)
@@ -168,3 +169,67 @@ def course_detail(request, pk):
     elif request.method == 'DELETE':
         course.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def question_bulk_create(request, course_id, bank_id):
+    try:
+        course = Course.objects.get(pk=course_id)
+        question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
+    except (Course.DoesNotExist, QuestionBank.DoesNotExist):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if not isinstance(request.data, list):
+        return Response(
+            {"error": "Data must be a list of questions"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    created_questions = []
+    
+    try:
+        with transaction.atomic():
+            for question_data in request.data:
+                # Extract answers from the question data
+                answers_data = question_data.pop('answers', [])
+                taxonomies_data = question_data.pop('taxonomies', [])
+                
+                # Create question
+                serializer = QuestionSerializer(data=question_data)
+                if serializer.is_valid():
+                    question = serializer.save(question_bank=question_bank)
+                    
+                    # Create answers for this question
+                    for answer_data in answers_data:
+                        Answer.objects.create(question=question, **answer_data)
+                    
+                    # Create taxonomy relationships
+                    for taxonomy_data in taxonomies_data:
+                        taxonomy_id = taxonomy_data.get('taxonomy_id')
+                        level = taxonomy_data.get('level')
+                        difficulty = taxonomy_data.get('difficulty', 'medium')
+                        
+                        try:
+                            taxonomy = Taxonomy.objects.get(pk=taxonomy_id)
+                            QuestionTaxonomy.objects.create(
+                                question=question,
+                                taxonomy=taxonomy,
+                                level=level,
+                                difficulty=difficulty
+                            )
+                        except Taxonomy.DoesNotExist:
+                            raise ValueError(f"Taxonomy with id {taxonomy_id} does not exist")
+                    
+                    created_questions.append(question)
+                else:
+                    raise ValueError(f"Invalid question data: {serializer.errors}")
+
+        # Serialize all created questions
+        response_serializer = QuestionSerializer(created_questions, many=True)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
