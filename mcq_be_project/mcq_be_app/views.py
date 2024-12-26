@@ -10,6 +10,7 @@ from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTa
 from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer
 import uuid
 from django.db import transaction
+from .ai_service import AIService
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -228,6 +229,28 @@ def question_bulk_create(request, course_id, bank_id):
         response_serializer = QuestionSerializer(created_questions, many=True)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_questions(request):
+    context = request.data.get('context', '')
+    
+    if not context:
+        return Response(
+            {"error": "Context is required"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        ai_service = AIService()
+        questions = ai_service.generate_questions(context)
+        return Response(questions, status=status.HTTP_200_OK)
+        
     except Exception as e:
         return Response(
             {"error": str(e)},

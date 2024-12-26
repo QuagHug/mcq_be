@@ -12,4 +12,7 @@ urlpatterns = [
     path('courses/<int:course_id>/question-banks/<int:bank_id>/questions/bulk/', 
          views.question_bulk_create, 
          name='question-bulk-create'),
+    path('generate-questions/', 
+         views.generate_questions, 
+         name='generate-questions'),
 ]
