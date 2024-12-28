@@ -7,7 +7,7 @@ class CourseSerializer(serializers.ModelSerializer):
     owner = serializers.SerializerMethodField()
 
     def get_owner(self, obj):
-        return obj.owner.username if obj.owner else None
+        return obj.owner.first_name + " " + obj.owner.last_name if obj.owner else None
 
     class Meta:
         model = Course
