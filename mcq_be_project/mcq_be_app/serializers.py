@@ -44,19 +44,45 @@ class QuestionTaxonomySerializer(serializers.ModelSerializer):
 
 
 class QuestionSerializer(serializers.ModelSerializer):
-    answers = AnswerSerializer(many=True, required=False)
-    taxonomies = QuestionTaxonomySerializer(many=True, read_only=True)
+    answers = AnswerSerializer(many=True)
+    taxonomies = QuestionTaxonomySerializer(many=True)
 
     class Meta:
         model = Question
-        fields = [
-            "id",
-            "question_text",
-            "image_url",
-            "answers",
-            "taxonomies",
-            "updated_at",
-        ]
+        fields = ['id', 'question_text', 'answers', 'taxonomies']
+
+    def update(self, instance, validated_data):
+        answers_data = validated_data.pop('answers', [])
+        taxonomies_data = validated_data.pop('taxonomies', [])
+
+        # Update question fields
+        instance.question_text = validated_data.get('question_text', instance.question_text)
+        instance.save()
+
+        # Update answers
+        if answers_data:
+            # Delete existing answers
+            instance.answers.all().delete()
+            # Create new answers
+            for answer_data in answers_data:
+                Answer.objects.create(question=instance, **answer_data)
+
+        # Update taxonomies
+        if taxonomies_data:
+            # Delete existing taxonomies
+            instance.questiontaxonomy_set.all().delete()
+            # Create new taxonomies
+            for taxonomy_data in taxonomies_data:
+                taxonomy_id = taxonomy_data.pop('taxonomy_id', None)
+                if taxonomy_id:
+                    taxonomy = Taxonomy.objects.get(id=taxonomy_id)
+                    QuestionTaxonomy.objects.create(
+                        question=instance,
+                        taxonomy=taxonomy,
+                        **taxonomy_data
+                    )
+
+        return instance
 
 
 class QuestionBankSerializer(serializers.ModelSerializer):
