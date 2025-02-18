@@ -190,10 +190,17 @@ def question_bulk_create(request, course_id, bank_id):
     
     try:
         with transaction.atomic():
-            for question_data in request.data:
+            for i, question_data in enumerate(request.data):
+                # Add debug logging
+                print(f"\nProcessing question {i + 1}:")
+                print(f"Question data received: {question_data}")
+                
                 # Extract answers from the question data
                 answers_data = question_data.pop('answers', [])
                 taxonomies_data = question_data.pop('taxonomies', [])
+                
+                print(f"Answers data: {answers_data}")
+                print(f"Taxonomies data: {taxonomies_data}")
                 
                 # Create question
                 serializer = QuestionSerializer(data=question_data)
@@ -223,13 +230,17 @@ def question_bulk_create(request, course_id, bank_id):
                     
                     created_questions.append(question)
                 else:
-                    raise ValueError(f"Invalid question data: {serializer.errors}")
+                    print(f"Serializer validation errors: {serializer.errors}")
+                    print(f"Invalid fields: {list(serializer.errors.keys())}")
+                    print(f"Full question data: {question_data}")
+                    raise ValueError(f"Invalid question data for question {i + 1}: {serializer.errors}")
 
         # Serialize all created questions
         response_serializer = QuestionSerializer(created_questions, many=True)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
     except Exception as e:
+        print(f"Error occurred: {str(e)}")
         return Response(
             {"error": str(e)},
             status=status.HTTP_400_BAD_REQUEST

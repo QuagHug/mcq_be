@@ -91,11 +91,11 @@ WSGI_APPLICATION = "mcq_be_project.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "mcq_db",
-        "USER": "postgres",
-        "PASSWORD": "Hung111103!",
-        "HOST": "localhost",  # or your PostgreSQL server's IP address
-        "PORT": "5432",  # default PostgreSQL port
+        "NAME": os.environ.get('DB_NAME', 'defaultdb'),
+        "USER": os.environ.get('DB_USER', 'avnadmin'),
+        "PASSWORD": os.environ.get('DB_PASSWORD', ''),
+        "HOST": os.environ.get('DB_HOST', 'pg-3d2cb107-grad-mcq.h.aivencloud.com'),
+        "PORT": os.environ.get('DB_PORT', '14167'),
     }
 }
 

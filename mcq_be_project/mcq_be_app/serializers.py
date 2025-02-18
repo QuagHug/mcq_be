@@ -44,8 +44,8 @@ class QuestionTaxonomySerializer(serializers.ModelSerializer):
 
 
 class QuestionSerializer(serializers.ModelSerializer):
-    answers = AnswerSerializer(many=True)
-    taxonomies = QuestionTaxonomySerializer(many=True)
+    answers = AnswerSerializer(many=True, required=False)
+    taxonomies = QuestionTaxonomySerializer(many=True, required=False)
 
     class Meta:
         model = Question
