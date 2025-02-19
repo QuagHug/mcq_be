@@ -8,10 +8,10 @@ https://docs.djangoproject.com/en/5.1/howto/deployment/wsgi/
 """
 
 import os
-import sys
+import subprocess
 
-if os.environ.get('ENV') == 'production':
-    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+# Install dependencies before importing Django
+subprocess.check_call(['pip3', 'install', '-r', 'requirements.txt'])
 
 from django.core.wsgi import get_wsgi_application
 

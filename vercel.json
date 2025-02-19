@@ -2,14 +2,6 @@
     "version": 2,
     "builds": [
       {
-        "src": "mcq_be_project/build_files.sh",
-        "use": "@vercel/static-build",
-        "config": {
-          "command": "chmod +x mcq_be_project/build_files.sh && ./mcq_be_project/build_files.sh",
-          "distDir": "dist"
-        }
-      },
-      {
         "src": "mcq_be_project/mcq_be_project/wsgi.py",
         "use": "@vercel/python",
         "config": { "maxLambdaSize": "15mb", "runtime": "python3.12" }
