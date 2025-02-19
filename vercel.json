@@ -10,7 +10,8 @@
         "src": "mcq_be_project/build_files.sh",
         "use": "@vercel/static-build",
         "config": {
-          "command": "chmod +x mcq_be_project/build_files.sh && ./mcq_be_project/build_files.sh"
+          "command": "chmod +x mcq_be_project/build_files.sh && ./mcq_be_project/build_files.sh",
+          "distDir": "dist"
         }
       }
     ],
