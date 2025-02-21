@@ -10,7 +10,7 @@
         }
       },
       {
-        "src": "wsgi.py",
+        "src": "mcq_be_project/wsgi.py",
         "use": "@vercel/python",
         "config": { "maxLambdaSize": "15mb", "runtime": "python3.12" }
       }
@@ -18,7 +18,7 @@
     "routes": [
       {
         "src": "/(.*)",
-        "dest": "wsgi.py"
+        "dest": "mcq_be_project/wsgi.py"
       }
     ]
 }
