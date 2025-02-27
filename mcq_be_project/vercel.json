@@ -19,12 +19,6 @@
       {
         "src": "/(.*)",
         "dest": "mcq_be_project/wsgi.py"
-      },
-      {
-        "src": "/mcq-be.vercel.app/(.*)",
-        "headers": [
-          { "key": "Access-Control-Allow-Origin", "value": "*" }
-        ]
-      }  
+      }
     ]
 }
