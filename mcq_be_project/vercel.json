@@ -18,7 +18,10 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "mcq_be_project/wsgi.py"
+      "dest": "mcq_be_project/wsgi.py",
+      "headers": {
+        "Access-Control-Allow-Origin": "*"
+      }
     }
   ]
 }
