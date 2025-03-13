@@ -45,8 +45,14 @@ class QuestionBank(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE)
     course = models.ForeignKey(
         Course, on_delete=models.CASCADE, related_name="question_banks"
+    ) 
+    parent = models.ForeignKey(
+        'self', 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True, 
+        related_name='children'
     )
-    is_child = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -92,12 +98,6 @@ class Taxonomy(models.Model):
 
 
 class QuestionTaxonomy(models.Model):
-    DIFFICULTY_CHOICES = [
-        ("easy", "Easy"),
-        ("medium", "Medium"),
-        ("hard", "Hard"),
-    ]
-
     question = models.ForeignKey(
         "Question", on_delete=models.CASCADE, related_name="taxonomies"
     )
@@ -105,9 +105,6 @@ class QuestionTaxonomy(models.Model):
         "Taxonomy", on_delete=models.CASCADE, related_name="questions"
     )
     level = models.CharField(max_length=255)
-    difficulty = models.CharField(
-        max_length=10, choices=DIFFICULTY_CHOICES, default="medium"
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -115,7 +112,7 @@ class QuestionTaxonomy(models.Model):
         unique_together = ("question", "taxonomy")
 
     def __str__(self):
-        return f"{self.question.question_text[:30]} - {self.taxonomy.name} (Level: {self.level}, Difficulty: {self.difficulty})"
+        return f"{self.question.question_text[:30]} - {self.taxonomy.name} (Level: {self.level})"
 
 
 admin.site.register(Course)

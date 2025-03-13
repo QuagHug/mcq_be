@@ -32,20 +32,21 @@ def register(request):
 # QuestionBank CRUD operations
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
-def question_bank_list(request,course_id):
+def question_bank_list(request, course_id):
     try:
         course = Course.objects.get(pk=course_id)
     except Course.DoesNotExist:
         return Response({'error': 'Course not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
-        question_banks = QuestionBank.objects.filter(course=course)
+        # Only get root-level question banks (those without parents)
+        question_banks = QuestionBank.objects.filter(course=course, parent=None)
         serializer = QuestionBankSerializer(question_banks, many=True)
         return Response(serializer.data)
 
     elif request.method == 'POST':
         data = request.data.copy()
-        data['bank_id'] = str(uuid.uuid4())  # Generate unique bank_id
+        data['bank_id'] = str(uuid.uuid4())
         serializer = QuestionBankSerializer(data=data)
         if serializer.is_valid():
             serializer.save(

@@ -40,7 +40,7 @@ class QuestionTaxonomySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = QuestionTaxonomy
-        fields = ["id", "taxonomy", "level", "difficulty"]
+        fields = ["id", "taxonomy", "level"]
 
 
 class QuestionSerializer(serializers.ModelSerializer):
@@ -89,12 +89,16 @@ class QuestionBankSerializer(serializers.ModelSerializer):
     questions = QuestionSerializer(many=True, read_only=True)
     question_count = serializers.SerializerMethodField()
     last_modified = serializers.SerializerMethodField()
+    children = serializers.SerializerMethodField()
+
+    def get_children(self, obj):
+        children = obj.children.all()
+        return QuestionBankSerializer(children, many=True).data
 
     def get_question_count(self, obj):
         return obj.questions.count()
 
     def get_last_modified(self, obj):
-        # Get the latest update time from either the bank itself or its questions
         latest_question = obj.questions.order_by("-updated_at").first()
         bank_updated = localtime(obj.updated_at) if hasattr(obj, "updated_at") else None
         question_updated = (
@@ -112,7 +116,8 @@ class QuestionBankSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "bank_id",
-            "is_child",
+            "parent",
+            "children",
             "created_by",
             "questions",
             "question_count",
