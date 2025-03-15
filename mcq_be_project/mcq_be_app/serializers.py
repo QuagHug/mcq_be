@@ -46,10 +46,19 @@ class QuestionTaxonomySerializer(serializers.ModelSerializer):
 class QuestionSerializer(serializers.ModelSerializer):
     answers = AnswerSerializer(many=True, required=False)
     taxonomies = QuestionTaxonomySerializer(many=True, required=False)
+    question_bank_id = serializers.IntegerField(source='question_bank.id', read_only=True)
 
     class Meta:
         model = Question
-        fields = ['id', 'question_text', 'answers', 'taxonomies']
+        fields = [
+            "id",
+            "question_text",
+            "answers",
+            "taxonomies",
+            "question_bank_id",
+            "created_at",
+            "updated_at",
+        ]
 
     def update(self, instance, validated_data):
         answers_data = validated_data.pop('answers', [])
@@ -90,6 +99,12 @@ class QuestionBankSerializer(serializers.ModelSerializer):
     question_count = serializers.SerializerMethodField()
     last_modified = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
+    parent_id = serializers.PrimaryKeyRelatedField(
+        source='parent',
+        queryset=QuestionBank.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     def get_children(self, obj):
         children = obj.children.all()
@@ -117,6 +132,7 @@ class QuestionBankSerializer(serializers.ModelSerializer):
             "description",
             "bank_id",
             "parent",
+            "parent_id",
             "children",
             "created_by",
             "questions",

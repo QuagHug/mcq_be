@@ -39,8 +39,14 @@ def question_bank_list(request, course_id):
         return Response({'error': 'Course not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
-        # Only get root-level question banks (those without parents)
-        question_banks = QuestionBank.objects.filter(course=course, parent=None)
+        parent_id = request.query_params.get('parent_id')
+        if parent_id:
+            # Get children of specific parent
+            question_banks = QuestionBank.objects.filter(course=course, parent_id=parent_id)
+        else:
+            # Get root-level banks (those without parent)
+            question_banks = QuestionBank.objects.filter(course=course, parent=None)
+        
         serializer = QuestionBankSerializer(question_banks, many=True)
         return Response(serializer.data)
 
