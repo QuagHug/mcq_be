@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, TestQuestion, Test
 from django.utils.timezone import localtime
 
 
@@ -140,3 +140,34 @@ class QuestionBankSerializer(serializers.ModelSerializer):
             "last_modified",
         ]
         read_only_fields = ["created_by"]
+
+
+class TestQuestionSerializer(serializers.ModelSerializer):
+    question_data = QuestionSerializer(source='question', read_only=True)
+    
+    class Meta:
+        model = TestQuestion
+        fields = ['id', 'test', 'question', 'question_data', 'order']
+        read_only_fields = ['test']
+
+
+class TestSerializer(serializers.ModelSerializer):
+    questions = TestQuestionSerializer(source='test_questions', many=True, read_only=True)
+    question_count = serializers.SerializerMethodField()
+
+    def get_question_count(self, obj):
+        return obj.test_questions.count()
+
+    class Meta:
+        model = Test
+        fields = [
+            'id',
+            'course',
+            'title',
+            'configuration',
+            'questions',
+            'question_count',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['course']

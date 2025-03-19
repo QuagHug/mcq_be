@@ -6,8 +6,8 @@ from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes
-from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy
-from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, Test, TestQuestion
+from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer, TestSerializer
 import uuid
 from django.db import transaction
 from .ai_service import AIService
@@ -272,5 +272,133 @@ def generate_questions(request):
     except Exception as e:
         return Response(
             {"error": str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def test_list(request, course_id):
+    try:
+        course = Course.objects.get(pk=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        tests = Test.objects.filter(course=course)
+        serializer = TestSerializer(tests, many=True)
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        data = request.data.copy()
+        serializer = TestSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save(course=course)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def test_detail(request, course_id, pk):
+    try:
+        test = Test.objects.get(course_id=course_id, pk=pk)
+    except Test.DoesNotExist:
+        return Response({'error': 'Test not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        serializer = TestSerializer(test)
+        return Response(serializer.data)
+
+    elif request.method == 'PUT':
+        serializer = TestSerializer(test, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == 'DELETE':
+        test.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def test_add_questions(request, course_id, test_id):
+    try:
+        test = Test.objects.get(course_id=course_id, pk=test_id)
+    except Test.DoesNotExist:
+        return Response({'error': 'Test not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    questions_data = request.data.get('questions', [])
+    created_questions = []
+
+    for question_data in questions_data:
+        question_id = question_data.get('question_id')
+        order = question_data.get('order', 0)
+
+        try:
+            question = Question.objects.get(pk=question_id)
+            test_question, created = TestQuestion.objects.get_or_create(
+                test=test,
+                question=question,
+                defaults={'order': order}
+            )
+            if not created:
+                test_question.order = order
+                test_question.save()
+            
+            created_questions.append({
+                'id': test_question.id,
+                'question_id': question_id,
+                'order': order
+            })
+        except Question.DoesNotExist:
+            return Response(
+                {'error': f'Question {question_id} not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    return Response(created_questions, status=status.HTTP_201_CREATED)
+
+@api_view(['POST'])
+def create_test(request, course_id):
+    try:
+        # Extract data from request
+        title = request.data.get('title', 'Untitled Test')
+        question_ids = request.data.get('question_ids', [])
+        
+        # Validate course exists
+        try:
+            course = Course.objects.get(id=course_id)
+        except Course.DoesNotExist:
+            return Response(
+                {'error': 'Course not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Create the test
+        test = Test.objects.create(
+            title=title,
+            course=course
+        )
+        
+        # Create test questions with order
+        for index, question_id in enumerate(question_ids):
+            try:
+                question = Question.objects.get(id=question_id)
+                TestQuestion.objects.create(
+                    test=test,
+                    question=question,
+                    order=index
+                )
+            except Question.DoesNotExist:
+                # Skip invalid question IDs
+                continue
+        
+        # Serialize and return the created test
+        serializer = TestSerializer(test)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
             status=status.HTTP_400_BAD_REQUEST
         )

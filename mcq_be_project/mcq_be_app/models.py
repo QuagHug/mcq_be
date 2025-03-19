@@ -115,6 +115,32 @@ class QuestionTaxonomy(models.Model):
         return f"{self.question.question_text[:30]} - {self.taxonomy.name} (Level: {self.level})"
 
 
+class Test(models.Model):
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='tests')
+    configuration = models.JSONField(default=dict)
+    title = models.CharField(max_length=255, default='Untitled Test')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Test {self.id} for {self.course.name}"
+
+
+class TestQuestion(models.Model):
+    test = models.ForeignKey(Test, on_delete=models.CASCADE, related_name='test_questions')
+    question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='test_questions')
+    order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order']
+        unique_together = [('test', 'question')]
+
+    def __str__(self):
+        return f"Question {self.question.id} in Test {self.test.id}"
+
+
 admin.site.register(Course)
 admin.site.register(QuestionBank)
 admin.site.register(Question)
