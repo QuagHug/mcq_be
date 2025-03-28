@@ -19,4 +19,7 @@ urlpatterns = [
     path('courses/<int:course_id>/tests/<int:pk>/', views.test_detail, name='test-detail'),
     path('courses/<int:course_id>/tests/<int:test_id>/questions/', views.test_add_questions, name='test-add-questions'),
     path('courses/<int:course_id>/tests/create/', views.create_test, name='create-test'),
+    path('courses/<int:course_id>/tests/<int:test_id>/results/upload/',
+         views.upload_test_results,
+         name='upload-test-results'),
 ]

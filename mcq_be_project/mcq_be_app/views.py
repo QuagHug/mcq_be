@@ -1,16 +1,24 @@
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes
-from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, Test, TestQuestion
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, Test, TestQuestion, TestResult
 from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer, TestSerializer
 import uuid
 from django.db import transaction
 from .ai_service import AIService
+import io
+import csv
+from rest_framework.parsers import MultiPartParser
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from girth import twopl_mml
+from datetime import datetime
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -402,3 +410,222 @@ def create_test(request, course_id):
             {'error': str(e)},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser])
+def upload_test_results(request, course_id, test_id):
+    try:
+        test = Test.objects.get(course_id=course_id, pk=test_id)
+        test_questions = Question.objects.filter(
+            test_questions__test=test
+        ).order_by('test_questions__order')
+    except Test.DoesNotExist:
+        return Response({'error': 'Test not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if 'file' not in request.FILES:
+        return Response({'error': 'File is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    file = request.FILES['file']
+    results = []
+    response_matrix = []
+
+    try:
+        # Read all sheets from Excel file
+        excel_file = pd.ExcelFile(file)
+        
+        # Read answers from first sheet
+        df_answers = pd.read_excel(excel_file, sheet_name=0)
+        
+        # Read mapping from third sheet
+        df_mapping = pd.read_excel(excel_file, sheet_name=2)
+        print("Available columns:", df_mapping.columns.tolist())
+        
+        # Create mapping dictionaries for each version
+        version_mappings = {}
+        db_col = df_mapping.columns[0]  # First column has our DB question numbers
+        
+        # For each version (each column after the first)
+        for version_col in df_mapping.columns[1:]:
+            version_mapping = {}
+            # For each row in mapping
+            for index, row in df_mapping.iterrows():
+                db_question = row[db_col]      # Get the DB question number
+                version_q = row[version_col]   # Get the shuffled question number
+                if pd.notna(db_question) and pd.notna(version_q):
+                    # Map from shuffled question number to DB question number
+                    version_mapping[int(version_q)] = int(db_question)
+            version_mappings[version_col] = version_mapping
+            print(f"Mapping for version {version_col}:", version_mapping)
+        
+        # Get the number of questions in this test
+        num_questions = test_questions.count()
+        print(f"Number of questions in test: {num_questions}")
+        
+        # Initialize response matrix
+        response_matrix = []
+        
+        # Process each student's answers
+        for idx, row in df_answers.iterrows():
+            student_responses = [0] * num_questions  # Initialize with zeros
+            has_answers = False
+            student_id = str(uuid.uuid4())
+            
+            # Get all C columns that exist
+            c_columns = [col for col in df_answers.columns if col.startswith('C')]
+            
+            # Try each version's mapping until we find one that works
+            used_version = None
+            for version, mapping in version_mappings.items():
+                test_responses = [0] * num_questions
+                valid_answers = 0
+                
+                # Try mapping all answers using this version
+                for col in c_columns:
+                    if pd.notna(row[col]):
+                        q_num = int(col[1:])  # Extract number from C1, C2, etc.
+                        if q_num in mapping:
+                            db_q_num = mapping[q_num]  # Get original DB question number
+                            answer_value = str(row[col])
+                            is_correct = answer_value.endswith('1')
+                            
+                            # Adjust index to 0-based
+                            mapped_index = db_q_num - 1
+                            if 0 <= mapped_index < num_questions:
+                                test_responses[mapped_index] = 1 if is_correct else 0
+                                valid_answers += 1
+                
+                # If this version gave us the most valid answers, use it
+                if valid_answers > sum(student_responses):
+                    student_responses = test_responses
+                    used_version = version
+                    has_answers = valid_answers > 0
+            
+            if has_answers:
+                print(f"Student {idx} used version {used_version} with {sum(student_responses)} valid answers")
+                response_matrix.append(student_responses)
+                # Create TestResult record
+                TestResult.objects.create(
+                    test=test,
+                    student_id=student_id,
+                    answers=student_responses
+                )
+                results.append({
+                    'student_id': student_id,
+                    'answers': student_responses,
+                    'version': used_version
+                })
+            else:
+                print(f"Skipped student {idx} - no valid answers found in any version")
+        
+        # Convert to numpy array for IRT calculation
+        response_matrix = np.array(response_matrix)
+        print(f"Final response matrix shape: {response_matrix.shape}")
+
+        try:
+            print("Attempting IRT calculation...")
+            print(f"Response matrix shape before IRT: {response_matrix.shape}")
+            
+            # Create a mapping of array index to question ID
+            index_to_question = {}
+            for i, question in enumerate(test_questions):
+                index_to_question[i] = question
+            
+            # Calculate classical statistics first
+            question_stats = {}
+            for i in range(response_matrix.shape[1]):
+                if i in index_to_question:
+                    question = index_to_question[i]
+                    total_responses = len(response_matrix)
+                    correct_responses = int(response_matrix[:, i].sum())
+                    p_value = float(correct_responses / total_responses) if total_responses > 0 else 0
+                    
+                    question_stats[question.id] = {
+                        'classical_parameters': {
+                            'p_value': p_value,
+                            'total_responses': total_responses,
+                            'correct_responses': correct_responses,
+                        }
+                    }
+                    print(f"Classical stats for question {question.id}: p={p_value}, correct={correct_responses}/{total_responses}")
+            
+            try:
+                # Fit 2PL IRT model using girth
+                irt_result = twopl_mml(response_matrix)
+                discrimination = irt_result['Discrimination']
+                difficulty = irt_result['Difficulty']
+                
+                # Update statistics for each question
+                for i, question in enumerate(test_questions):
+                    if not question.statistics:
+                        question.statistics = {}
+                    
+                    if question.id in question_stats:
+                        new_stats = {
+                            'irt_parameters': {
+                                'difficulty': float(difficulty[i]),
+                                'discrimination': float(discrimination[i]),
+                            },
+                            'classical_parameters': question_stats[question.id]['classical_parameters'],
+                            'last_updated': str(datetime.now())
+                        }
+                        
+                        print(f"Updating statistics for question {question.id}:")
+                        print(f"Old statistics: {question.statistics}")
+                        print(f"New statistics: {new_stats}")
+                        
+                        question.statistics.update(new_stats)
+                        question.save()
+            
+            except Exception as irt_calc_error:
+                print(f"IRT calculation specific error: {str(irt_calc_error)}")
+                # Even if IRT fails, save the classical statistics
+                for question in test_questions:
+                    if not question.statistics:
+                        question.statistics = {}
+                    
+                    if question.id in question_stats:
+                        question.statistics.update({
+                            'classical_parameters': question_stats[question.id]['classical_parameters'],
+                            'error': f'IRT calculation failed: {str(irt_calc_error)}',
+                            'last_updated': str(datetime.now())
+                        })
+                        question.save()
+                raise
+
+        except Exception as irt_error:
+            print(f"IRT calculation error: {str(irt_error)}")
+            # Fallback to classical statistics
+            for i, question in enumerate(test_questions):
+                if not question.statistics:
+                    question.statistics = {}
+                
+                total_responses = len(response_matrix)
+                correct_responses = int(response_matrix[:, i].sum()) if len(response_matrix) > 0 else 0
+                
+                new_stats = {
+                    'classical_parameters': {
+                        'p_value': float(correct_responses / total_responses) if total_responses > 0 else 0,
+                        'total_responses': total_responses,
+                        'correct_responses': correct_responses,
+                    },
+                    'error': f'IRT calculation failed: {str(irt_error)}',
+                    'last_updated': str(datetime.now())
+                }
+                
+                print(f"Updating statistics for question {question.id} (error fallback):")
+                print(f"Old statistics: {question.statistics}")
+                print(f"New statistics: {new_stats}")
+                
+                question.statistics.update(new_stats)
+                question.save()
+
+        return Response({
+            'message': 'Test results uploaded successfully',
+            'test_id': test.id,
+            'results_count': len(results),
+            'irt_calculated': True
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

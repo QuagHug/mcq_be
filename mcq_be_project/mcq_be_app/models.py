@@ -66,6 +66,7 @@ class Question(models.Model):
     question_bank = models.ForeignKey(
         "QuestionBank", related_name="questions", on_delete=models.CASCADE
     )
+    statistics = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -139,6 +140,16 @@ class TestQuestion(models.Model):
 
     def __str__(self):
         return f"Question {self.question.id} in Test {self.test.id}"
+
+
+class TestResult(models.Model):
+    test = models.ForeignKey(Test, on_delete=models.CASCADE, related_name='results')
+    student_id = models.CharField(max_length=36)  # Will use UUID
+    answers = models.JSONField()  # Will store array of booleans
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['test', 'student_id']
 
 
 admin.site.register(Course)
