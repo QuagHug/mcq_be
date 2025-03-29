@@ -44,8 +44,9 @@ class QuestionTaxonomySerializer(serializers.ModelSerializer):
 
 
 class QuestionSerializer(serializers.ModelSerializer):
-    answers = AnswerSerializer(many=True, required=False)
-    taxonomies = QuestionTaxonomySerializer(many=True, required=False)
+    answers = AnswerSerializer(many=True, read_only=True)
+    taxonomies = QuestionTaxonomySerializer(source='question_taxonomies', many=True, read_only=True)
+    statistics = serializers.SerializerMethodField()
     question_bank_id = serializers.IntegerField(source='question_bank.id', read_only=True)
 
     class Meta:
@@ -58,6 +59,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             "question_bank_id",
             "created_at",
             "updated_at",
+            "statistics"
         ]
 
     def update(self, instance, validated_data):
@@ -92,6 +94,31 @@ class QuestionSerializer(serializers.ModelSerializer):
                     )
 
         return instance
+
+    def get_statistics(self, obj):
+        if not obj.statistics:
+            return None
+
+        stats = obj.statistics.copy()
+        
+        if 'irt_parameters' in stats:
+            irt = stats['irt_parameters']
+            difficulty = float(irt.get('difficulty', 0))
+            discrimination = float(irt.get('discrimination', 0))
+            
+            # Scale difficulty from [-6, 3] to [0, 10]
+            difficulty_score = 10 - ((difficulty + 6) * (10 / 9))
+            difficulty_score = max(0, min(10, difficulty_score))
+            
+            # Scale discrimination from [0.2, 0.5] to [0, 10]
+            discrimination_score = (discrimination - 0.2) * (10 / 0.3)
+            discrimination_score = max(0, min(10, discrimination_score))
+            
+            # Add scaled scores to the statistics
+            stats['scaled_difficulty'] = round(difficulty_score, 2)
+            stats['scaled_discrimination'] = round(discrimination_score, 2)
+        
+        return stats
 
 
 class QuestionBankSerializer(serializers.ModelSerializer):
