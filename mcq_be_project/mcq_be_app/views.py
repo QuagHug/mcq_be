@@ -372,6 +372,14 @@ def create_test(request, course_id):
         # Extract data from request
         title = request.data.get('title', 'Untitled Test')
         question_ids = request.data.get('question_ids', [])
+        config = request.data.get('config', {})
+        
+        # Validate and transform config
+        configuration = {
+            'letterCase': config.get('letterCase', 'uppercase'),
+            'separator': config.get('separator', ')'),
+            'includeAnswerKey': config.get('includeAnswerKey', False)
+        }
         
         # Validate course exists
         try:
@@ -385,7 +393,8 @@ def create_test(request, course_id):
         # Create the test
         test = Test.objects.create(
             title=title,
-            course=course
+            course=course,
+            configuration=configuration
         )
         
         # Create test questions with order
@@ -398,10 +407,8 @@ def create_test(request, course_id):
                     order=index
                 )
             except Question.DoesNotExist:
-                # Skip invalid question IDs
                 continue
         
-        # Serialize and return the created test
         serializer = TestSerializer(test)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
