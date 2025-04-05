@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, TestQuestion, Test
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, TestQuestion, Test, TestDraft
 from django.utils.timezone import localtime
 
 
@@ -198,3 +198,10 @@ class TestSerializer(serializers.ModelSerializer):
             'updated_at'
         ]
         read_only_fields = ['course']
+
+
+class TestDraftSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TestDraft
+        fields = ['id', 'course', 'draft_data', 'created_at', 'updated_at', 'created_by']
+        read_only_fields = ['created_by']

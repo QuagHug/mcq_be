@@ -6,8 +6,8 @@ from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes
-from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, Test, TestQuestion, TestResult
-from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer, TestSerializer
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, Test, TestQuestion, TestResult, TestDraft
+from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer, TestSerializer, TestDraftSerializer
 import uuid
 from django.db import transaction
 from .ai_service import AIService
@@ -636,3 +636,80 @@ def upload_test_results(request, course_id, test_id):
 
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def test_draft_create(request):
+    if request.method == 'DELETE':
+        deleted_count, _ = TestDraft.objects.filter(created_by=request.user).delete()
+        return Response({
+            'message': f'Successfully deleted {deleted_count} draft(s)',
+            'deleted_count': deleted_count
+        }, status=status.HTTP_200_OK)
+    
+    try:
+        # Get course ID from request
+        course_id = request.data.get('courseId')
+        
+        # Validate course exists
+        try:
+            course = Course.objects.get(id=course_id)
+        except Course.DoesNotExist:
+            return Response(
+                {'error': 'Course not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Delete any existing drafts for this user (regardless of course)
+        TestDraft.objects.filter(created_by=request.user).delete()
+        
+        # Create test draft
+        test_draft = TestDraft.objects.create(
+            course=course,
+            draft_data=request.data,
+            created_by=request.user
+        )
+        
+        serializer = TestDraftSerializer(test_draft)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def test_draft_detail(request, draft_id):
+    try:
+        draft = TestDraft.objects.get(pk=draft_id, created_by=request.user)
+    except TestDraft.DoesNotExist:
+        return Response({'error': 'Test draft not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == 'GET':
+        serializer = TestDraftSerializer(draft)
+        return Response(serializer.data)
+    
+    elif request.method == 'PUT':
+        draft.draft_data = request.data
+        draft.save()
+        serializer = TestDraftSerializer(draft)
+        return Response(serializer.data)
+    
+    elif request.method == 'DELETE':
+        draft.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def test_draft_list(request):
+    # Get course_id from query params if provided
+    course_id = request.query_params.get('course_id')
+    
+    if course_id:
+        drafts = TestDraft.objects.filter(course_id=course_id, created_by=request.user)
+    else:
+        drafts = TestDraft.objects.filter(created_by=request.user)
+        
+    serializer = TestDraftSerializer(drafts, many=True)
+    return Response(serializer.data)

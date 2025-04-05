@@ -152,6 +152,17 @@ class TestResult(models.Model):
         unique_together = ['test', 'student_id']
 
 
+class TestDraft(models.Model):
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='test_drafts')
+    draft_data = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='test_drafts')
+
+    def __str__(self):
+        return f"Test Draft for {self.course.name}"
+
+
 admin.site.register(Course)
 admin.site.register(QuestionBank)
 admin.site.register(Question)

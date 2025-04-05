@@ -22,4 +22,7 @@ urlpatterns = [
     path('courses/<int:course_id>/tests/<int:test_id>/results/upload/',
          views.upload_test_results,
          name='upload-test-results'),
+    path('test-drafts/', views.test_draft_create, name='test-draft-create'),
+    path('test-drafts/list/', views.test_draft_list, name='test-draft-list'),
+    path('test-drafts/<int:draft_id>', views.test_draft_detail, name='test-draft-detail'),
 ]
