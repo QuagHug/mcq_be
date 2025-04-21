@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, TestQuestion, Test, TestDraft
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, TestQuestion, Test, TestDraft, QuestionGroup
 from django.utils.timezone import localtime
 
 
@@ -45,9 +45,15 @@ class QuestionTaxonomySerializer(serializers.ModelSerializer):
 
 class QuestionSerializer(serializers.ModelSerializer):
     answers = AnswerSerializer(many=True, read_only=True)
-    taxonomies = QuestionTaxonomySerializer(source='question_taxonomies', many=True, read_only=True)
+    taxonomies = serializers.SerializerMethodField()
     statistics = serializers.SerializerMethodField()
     question_bank_id = serializers.IntegerField(source='question_bank.id', read_only=True)
+    question_group_id = serializers.PrimaryKeyRelatedField(
+        source='question_group',
+        queryset=QuestionGroup.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = Question
@@ -55,11 +61,30 @@ class QuestionSerializer(serializers.ModelSerializer):
             "id",
             "question_text",
             "answers",
-            "taxonomies",
             "question_bank_id",
+            "question_group_id",
             "created_at",
             "updated_at",
-            "statistics"
+            "statistics",
+            "taxonomies",
+            "difficulty"
+        ]
+
+    def get_taxonomies(self, obj):
+        question_taxonomies = obj.taxonomies.select_related('taxonomy').all()
+        return [
+            {
+                'id': qt.id,
+                'taxonomy': {
+                    'id': qt.taxonomy.id,
+                    'name': qt.taxonomy.name,
+                    'description': qt.taxonomy.description,
+                    'category': qt.taxonomy.category,
+                    'levels': qt.taxonomy.levels
+                },
+                'level': qt.level
+            }
+            for qt in question_taxonomies
         ]
 
     def update(self, instance, validated_data):
@@ -205,3 +230,24 @@ class TestDraftSerializer(serializers.ModelSerializer):
         model = TestDraft
         fields = ['id', 'course', 'draft_data', 'created_at', 'updated_at', 'created_by']
         read_only_fields = ['created_by']
+
+
+class QuestionGroupSerializer(serializers.ModelSerializer):
+    question_count = serializers.SerializerMethodField()
+    
+    def get_question_count(self, obj):
+        return obj.questions.count()
+    
+    class Meta:
+        model = QuestionGroup
+        fields = [
+            'id',
+            'name',
+            'context',
+            'group_id',
+            'question_bank',
+            'question_count',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['question_bank']

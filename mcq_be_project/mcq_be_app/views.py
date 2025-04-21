@@ -6,8 +6,8 @@ from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes
-from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, Test, TestQuestion, TestResult, TestDraft
-from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer, TestSerializer, TestDraftSerializer
+from .models import QuestionBank, Question, Answer, Course, Taxonomy, QuestionTaxonomy, Test, TestQuestion, TestResult, TestDraft, QuestionGroup
+from .serializers import QuestionBankSerializer, QuestionSerializer, CourseSerializer, TestSerializer, TestDraftSerializer, QuestionTaxonomySerializer, QuestionGroupSerializer
 import uuid
 from django.db import transaction
 from .ai_service import AIService
@@ -112,11 +112,21 @@ def question_list(request, course_id, bank_id):
     elif request.method == 'POST':
         data = request.data.copy()
         answers_data = data.pop('answers', [])
+        question_group_id = data.pop('question_group_id', None)
         
         serializer = QuestionSerializer(data=data)
         if serializer.is_valid():
             question = serializer.save(question_bank=question_bank)
-        
+            
+            # Set question group if provided
+            if question_group_id:
+                try:
+                    question_group = QuestionGroup.objects.get(pk=question_group_id, question_bank=question_bank)
+                    question.question_group = question_group
+                    question.save()
+                except QuestionGroup.DoesNotExist:
+                    pass
+            
             # Create answers
             for answer_data in answers_data:
                 Answer.objects.create(question=question, **answer_data)
@@ -317,11 +327,28 @@ def test_detail(request, course_id, pk):
         return Response(serializer.data)
 
     elif request.method == 'PUT':
-        serializer = TestSerializer(test, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # Update basic test info
+        test.title = request.data.get('title', test.title)
+        test.configuration = request.data.get('config', test.configuration)
+        test.save()
+        
+        # Update question relationships
+        if 'question_ids' in request.data:
+            # Clear existing questions
+            TestQuestion.objects.filter(test=test).delete()
+            
+            # Add new questions
+            question_ids = request.data['question_ids']
+            for index, q_id in enumerate(question_ids):
+                TestQuestion.objects.create(
+                    test=test,
+                    question_id=q_id,
+                    order=index
+                )
+        
+        # Return updated test data
+        serializer = TestSerializer(test)
+        return Response(serializer.data)
 
     elif request.method == 'DELETE':
         test.delete()
@@ -427,6 +454,11 @@ def upload_test_results(request, course_id, test_id):
         test_questions = Question.objects.filter(
             test_questions__test=test
         ).order_by('test_questions__order')
+        
+        # Get the number of questions in this test
+        num_questions = test_questions.count()
+        print(f"Number of questions in test: {num_questions}")
+        
     except Test.DoesNotExist:
         return Response({'error': 'Test not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -463,11 +495,16 @@ def upload_test_results(request, course_id, test_id):
                     # Map from shuffled question number to DB question number
                     version_mapping[int(version_q)] = int(db_question)
             version_mappings[version_col] = version_mapping
-            print(f"Mapping for version {version_col}:", version_mapping)
         
-        # Get the number of questions in this test
-        num_questions = test_questions.count()
-        print(f"Number of questions in test: {num_questions}")
+        # Verify that the mapping contains all questions from the test
+        for version, mapping in version_mappings.items():
+            mapped_questions = set(mapping.values())
+            if len(mapped_questions) != num_questions:
+                return Response({
+                    'error': f'Mapping mismatch: Test has {num_questions} questions, but mapping for version {version} has {len(mapped_questions)} questions',
+                    'test_questions': num_questions,
+                    'mapped_questions': len(mapped_questions)
+                }, status=status.HTTP_400_BAD_REQUEST)
         
         # Initialize response matrix
         response_matrix = []
@@ -510,6 +547,11 @@ def upload_test_results(request, course_id, test_id):
             
             if has_answers:
                 print(f"Student {idx} used version {used_version} with {sum(student_responses)} valid answers")
+                
+                # Check if the number of valid answers matches the test's question count
+                if valid_answers != num_questions:
+                    print(f"Warning: Student {idx} has {valid_answers} valid answers, but test has {num_questions} questions")
+                
                 response_matrix.append(student_responses)
                 # Create TestResult record
                 TestResult.objects.create(
@@ -525,10 +567,24 @@ def upload_test_results(request, course_id, test_id):
             else:
                 print(f"Skipped student {idx} - no valid answers found in any version")
         
+        # Check if we have any valid responses
+        if len(response_matrix) == 0:
+            return Response({
+                'error': 'No valid student responses found in the uploaded file'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         # Convert to numpy array for IRT calculation
         response_matrix = np.array(response_matrix)
         print(f"Final response matrix shape: {response_matrix.shape}")
 
+        # Verify response matrix dimensions match test questions
+        if response_matrix.shape[1] != num_questions:
+            return Response({
+                'error': f'Response matrix has {response_matrix.shape[1]} columns, but test has {num_questions} questions',
+                'test_questions': num_questions,
+                'response_columns': response_matrix.shape[1]
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
         try:
             print("Attempting IRT calculation...")
             print(f"Response matrix shape before IRT: {response_matrix.shape}")
@@ -636,6 +692,7 @@ def upload_test_results(request, course_id, test_id):
 
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 @api_view(['POST', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def test_draft_create(request):
@@ -712,4 +769,176 @@ def test_draft_list(request):
         drafts = TestDraft.objects.filter(created_by=request.user)
         
     serializer = TestDraftSerializer(drafts, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET', 'POST', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def question_taxonomy_mapping(request, question_id):
+    try:
+        question = Question.objects.get(pk=question_id)
+    except Question.DoesNotExist:
+        return Response({'error': 'Question not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == 'GET':
+        # Get all taxonomy mappings for this question
+        mappings = QuestionTaxonomy.objects.filter(question=question)
+        serializer = QuestionTaxonomySerializer(mappings, many=True)
+        return Response(serializer.data)
+    
+    elif request.method == 'POST':
+        # Create a new taxonomy mapping
+        taxonomy_id = request.data.get('taxonomy_id')
+        level = request.data.get('level')
+        difficulty = request.data.get('difficulty', 'medium')
+        
+        try:
+            taxonomy = Taxonomy.objects.get(pk=taxonomy_id)
+            mapping = QuestionTaxonomy.objects.create(
+                question=question,
+                taxonomy=taxonomy,
+                level=level,
+                difficulty=difficulty
+            )
+            serializer = QuestionTaxonomySerializer(mapping)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Taxonomy.DoesNotExist:
+            return Response(
+                {'error': f'Taxonomy with id {taxonomy_id} does not exist'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    elif request.method == 'PUT':
+        # Update an existing mapping
+        mapping_id = request.data.get('mapping_id')
+        try:
+            mapping = QuestionTaxonomy.objects.get(pk=mapping_id, question=question)
+            
+            # Update fields
+            if 'level' in request.data:
+                mapping.level = request.data['level']
+            if 'difficulty' in request.data:
+                mapping.difficulty = request.data['difficulty']
+                
+            mapping.save()
+            serializer = QuestionTaxonomySerializer(mapping)
+            return Response(serializer.data)
+        except QuestionTaxonomy.DoesNotExist:
+            return Response(
+                {'error': 'Mapping not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    elif request.method == 'DELETE':
+        # Delete a mapping
+        mapping_id = request.data.get('mapping_id')
+        if mapping_id:
+            try:
+                mapping = QuestionTaxonomy.objects.get(pk=mapping_id, question=question)
+                mapping.delete()
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            except QuestionTaxonomy.DoesNotExist:
+                return Response(
+                    {'error': 'Mapping not found'}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            # Delete all mappings for this question
+            QuestionTaxonomy.objects.filter(question=question).delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def update_test(request, course_id, test_id):
+    try:
+        # Get test and verify it belongs to the course
+        test = Test.objects.get(pk=test_id, course_id=course_id)
+        
+        # Update basic test info
+        test.title = request.data.get('title', test.title)
+        test.config = request.data.get('config', test.config)
+        test.save()
+        
+        # Update question relationships
+        if 'question_ids' in request.data:
+            # Clear existing questions
+            TestQuestion.objects.filter(test=test).delete()
+            
+            # Add new questions
+            question_ids = request.data['question_ids']
+            for index, q_id in enumerate(question_ids):
+                TestQuestion.objects.create(
+                    test=test,
+                    question_id=q_id,
+                    order=index
+                )
+        
+        # Return updated test data
+        serializer = TestSerializer(test)
+        return Response(serializer.data)
+        
+    except Test.DoesNotExist:
+        return Response({'error': 'Test not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Question.DoesNotExist:
+        return Response({'error': 'One or more questions not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def question_group_list(request, course_id, bank_id):
+    try:
+        course = Course.objects.get(pk=course_id)
+        question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
+    except (Course.DoesNotExist, QuestionBank.DoesNotExist):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        groups = QuestionGroup.objects.filter(question_bank=question_bank)
+        serializer = QuestionGroupSerializer(groups, many=True)
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        data = request.data.copy()
+        data['group_id'] = str(uuid.uuid4())
+        serializer = QuestionGroupSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save(question_bank=question_bank)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def question_group_detail(request, course_id, bank_id, pk):
+    try:
+        course = Course.objects.get(pk=course_id)
+        question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
+        question_group = QuestionGroup.objects.get(pk=pk, question_bank=question_bank)
+    except (Course.DoesNotExist, QuestionBank.DoesNotExist, QuestionGroup.DoesNotExist):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        serializer = QuestionGroupSerializer(question_group)
+        return Response(serializer.data)
+
+    elif request.method == 'PUT':
+        serializer = QuestionGroupSerializer(question_group, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == 'DELETE':
+        question_group.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def question_group_questions(request, course_id, bank_id, group_id):
+    try:
+        course = Course.objects.get(pk=course_id)
+        question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
+        question_group = QuestionGroup.objects.get(pk=group_id, question_bank=question_bank)
+    except (Course.DoesNotExist, QuestionBank.DoesNotExist, QuestionGroup.DoesNotExist):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    questions = Question.objects.filter(question_group=question_group)
+    serializer = QuestionSerializer(questions, many=True)
     return Response(serializer.data)

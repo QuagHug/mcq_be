@@ -1,6 +1,9 @@
 from django.urls import path
 from . import views
 
+def trigger_error(request):
+    division_by_zero = 1 / 0
+
 urlpatterns = [
     path('register/', views.register, name='register'),
     path('courses/', views.course_list, name='course-list'),
@@ -25,4 +28,17 @@ urlpatterns = [
     path('test-drafts/', views.test_draft_create, name='test-draft-create'),
     path('test-drafts/list/', views.test_draft_list, name='test-draft-list'),
     path('test-drafts/<int:draft_id>', views.test_draft_detail, name='test-draft-detail'),
+    path('sentry-debug/', trigger_error),
+    path('questions/<int:question_id>/taxonomies/', 
+         views.question_taxonomy_mapping, 
+         name='question-taxonomy-mapping'),
+    path('courses/<int:course_id>/question-banks/<int:bank_id>/groups/', 
+         views.question_group_list, 
+         name='question-group-list'),
+    path('courses/<int:course_id>/question-banks/<int:bank_id>/groups/<int:pk>/', 
+         views.question_group_detail, 
+         name='question-group-detail'),
+    path('courses/<int:course_id>/question-banks/<int:bank_id>/groups/<int:group_id>/questions/', 
+         views.question_group_questions, 
+         name='question-group-questions'),
 ]

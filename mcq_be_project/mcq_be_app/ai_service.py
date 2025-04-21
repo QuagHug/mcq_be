@@ -24,6 +24,7 @@ class AIService:
         [
             {{
                 "question_text": "The question",
+                "difficulty": "{difficulty}",
                 "answers": [
                     {{"answer_text": "Correct answer", "is_correct": true, "explanation": "Why this is correct"}},
                     {{"answer_text": "Wrong answer 1", "is_correct": false, "explanation": "Why this is wrong"}},
@@ -43,6 +44,7 @@ class AIService:
         Please ensure:
         1. Each question has exactly one correct answer
         2. All explanations are clear and educational
+        3. Difficulty should be one of: easy, medium, hard
         """
 
         response = self.client.chat.completions.create(
