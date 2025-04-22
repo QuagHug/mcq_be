@@ -130,6 +130,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             irt = stats['irt_parameters']
             difficulty = float(irt.get('difficulty', 0))
             discrimination = float(irt.get('discrimination', 0))
+            guessing = float(irt.get('guessing', 0.2))
             
             # Scale difficulty from [-6, 3] to [0, 10]
             difficulty_score = 10 - ((difficulty + 6) * (10 / 9))
@@ -139,9 +140,13 @@ class QuestionSerializer(serializers.ModelSerializer):
             discrimination_score = (discrimination - 0.2) * (10 / 0.3)
             discrimination_score = max(0, min(10, discrimination_score))
             
+            # Scale guessing from [0, 1] to [0, 10]
+            guessing_score = guessing * 10
+            
             # Add scaled scores to the statistics
             stats['scaled_difficulty'] = round(difficulty_score, 2)
             stats['scaled_discrimination'] = round(discrimination_score, 2)
+            stats['scaled_guessing'] = round(guessing_score, 2)
         
         return stats
 

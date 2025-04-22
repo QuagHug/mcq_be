@@ -613,10 +613,17 @@ def upload_test_results(request, course_id, test_id):
                     print(f"Classical stats for question {question.id}: p={p_value}, correct={correct_responses}/{total_responses}")
             
             try:
-                # Fit 2PL IRT model using girth
-                irt_result = twopl_mml(response_matrix)
+                # Import 3PL model from girth
+                from girth import threepl_mml
+                
+                # Call threepl_mml without the guessing parameter
+                # Let the function handle guessing initialization internally
+                irt_result = threepl_mml(response_matrix)
+                
+                # Extract parameters from result
                 discrimination = irt_result['Discrimination']
                 difficulty = irt_result['Difficulty']
+                guessing = irt_result['Guessing']  # The guessing param should be in the result
                 
                 # Update statistics for each question
                 for i, question in enumerate(test_questions):
@@ -628,6 +635,7 @@ def upload_test_results(request, course_id, test_id):
                             'irt_parameters': {
                                 'difficulty': float(difficulty[i]),
                                 'discrimination': float(discrimination[i]),
+                                'guessing': float(guessing[i]),
                             },
                             'classical_parameters': question_stats[question.id]['classical_parameters'],
                             'last_updated': str(datetime.now())
@@ -687,7 +695,8 @@ def upload_test_results(request, course_id, test_id):
             'message': 'Test results uploaded successfully',
             'test_id': test.id,
             'results_count': len(results),
-            'irt_calculated': True
+            'irt_calculated': True,
+            'model_used': '3PL'  # Add information about which model was used
         }, status=status.HTTP_201_CREATED)
 
     except Exception as e:
