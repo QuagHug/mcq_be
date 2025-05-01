@@ -130,23 +130,44 @@ class QuestionSerializer(serializers.ModelSerializer):
             irt = stats['irt_parameters']
             difficulty = float(irt.get('difficulty', 0))
             discrimination = float(irt.get('discrimination', 0))
-            guessing = float(irt.get('guessing', 0.2))
+            guessing = float(irt.get('guessing', 0.25))
             
-            # Scale difficulty from [-6, 3] to [0, 10]
-            difficulty_score = 10 - ((difficulty + 6) * (10 / 9))
+            # Scale difficulty from [-6, 6] to [0, 10]
+            difficulty_score = (difficulty + 6) * (10 / 12)
             difficulty_score = max(0, min(10, difficulty_score))
             
-            # Scale discrimination from [0.2, 0.5] to [0, 10]
-            discrimination_score = (discrimination - 0.2) * (10 / 0.3)
+            # Scale discrimination from [0, 4] to [0, 10]
+            discrimination_score = discrimination * 2.5
             discrimination_score = max(0, min(10, discrimination_score))
             
-            # Scale guessing from [0, 1] to [0, 10]
-            guessing_score = guessing * 10
+            # Scale guessing from [0, 1] to [10, 0] (inverted because lower guessing is better)
+            guessing_score = 10 - (guessing * 10)
             
             # Add scaled scores to the statistics
             stats['scaled_difficulty'] = round(difficulty_score, 2)
             stats['scaled_discrimination'] = round(discrimination_score, 2)
             stats['scaled_guessing'] = round(guessing_score, 2)
+            
+            # Define weights for the quality formula
+            w1 = 1.0   # weight for discrimination
+            w2 = 0.5   # penalty for difficulty deviation
+            w3 = 2.0   # heavy penalty for guessing
+            
+            # Calculate raw quality score using the formula: w1*a - w2*|b| - w3*c
+            # Note: We use the original IRT parameters, not the scaled scores
+            raw_quality = (w1 * discrimination) - (w2 * abs(difficulty)) - (w3 * guessing)
+            
+            # Normalize to a 0-10 scale
+            # Typical range for raw_quality might be from -3 to +3
+            # We'll map this to 0-10 with a reasonable transformation
+            normalized_quality = (raw_quality + 3) * (10/6)
+            normalized_quality = max(0, min(10, normalized_quality))
+            
+            # Add quality score to statistics
+            stats['quality_score'] = round(normalized_quality, 2)
+            
+            # Add a note about the formula used
+            stats['quality_formula'] = "w1*a - w2*|b| - w3*c where w1=1.0, w2=0.5, w3=2.0"
         
         return stats
 
