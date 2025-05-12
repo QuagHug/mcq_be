@@ -19,6 +19,10 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from girth import twopl_mml
 from datetime import datetime
+from .similarity_service import SimilarityService
+
+# Initialize the similarity service
+similarity_service = SimilarityService()
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -112,6 +116,7 @@ def question_list(request, course_id, bank_id):
     elif request.method == 'POST':
         data = request.data.copy()
         answers_data = data.pop('answers', [])
+        taxonomies_data = data.pop('taxonomies', [])  # Extract taxonomies
         question_group_id = data.pop('question_group_id', None)
         
         serializer = QuestionSerializer(data=data)
@@ -130,6 +135,21 @@ def question_list(request, course_id, bank_id):
             # Create answers
             for answer_data in answers_data:
                 Answer.objects.create(question=question, **answer_data)
+            
+            # Create taxonomy relationships
+            for taxonomy_data in taxonomies_data:
+                taxonomy_id = taxonomy_data.get('taxonomy_id')
+                level = taxonomy_data.get('level')
+                
+                try:
+                    taxonomy = Taxonomy.objects.get(pk=taxonomy_id)
+                    QuestionTaxonomy.objects.create(
+                        question=question,
+                        taxonomy=taxonomy,
+                        level=level
+                    )
+                except Taxonomy.DoesNotExist:
+                    pass
             
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -240,15 +260,13 @@ def question_bulk_create(request, course_id, bank_id):
                     for taxonomy_data in taxonomies_data:
                         taxonomy_id = taxonomy_data.get('taxonomy_id')
                         level = taxonomy_data.get('level')
-                        difficulty = taxonomy_data.get('difficulty', 'medium')
                         
                         try:
                             taxonomy = Taxonomy.objects.get(pk=taxonomy_id)
                             QuestionTaxonomy.objects.create(
                                 question=question,
                                 taxonomy=taxonomy,
-                                level=level,
-                                difficulty=difficulty
+                                level=level
                             )
                         except Taxonomy.DoesNotExist:
                             raise ValueError(f"Taxonomy with id {taxonomy_id} does not exist")
@@ -798,15 +816,13 @@ def question_taxonomy_mapping(request, question_id):
         # Create a new taxonomy mapping
         taxonomy_id = request.data.get('taxonomy_id')
         level = request.data.get('level')
-        difficulty = request.data.get('difficulty', 'medium')
         
         try:
             taxonomy = Taxonomy.objects.get(pk=taxonomy_id)
             mapping = QuestionTaxonomy.objects.create(
                 question=question,
                 taxonomy=taxonomy,
-                level=level,
-                difficulty=difficulty
+                level=level
             )
             serializer = QuestionTaxonomySerializer(mapping)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -825,9 +841,7 @@ def question_taxonomy_mapping(request, question_id):
             # Update fields
             if 'level' in request.data:
                 mapping.level = request.data['level']
-            if 'difficulty' in request.data:
-                mapping.difficulty = request.data['difficulty']
-                
+            
             mapping.save()
             serializer = QuestionTaxonomySerializer(mapping)
             return Response(serializer.data)
@@ -951,3 +965,85 @@ def question_group_questions(request, course_id, bank_id, group_id):
     questions = Question.objects.filter(question_group=question_group)
     serializer = QuestionSerializer(questions, many=True)
     return Response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def check_question_similarity(request):
+    """
+    Check if a question is similar to existing questions in the database.
+    """
+    question_text = request.data.get('question_text')
+    question_bank_id = request.data.get('question_bank_id')
+    threshold = request.data.get('threshold', 0.75)
+    
+    if not question_text:
+        return Response(
+            {"error": "Question text is required"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Build or update the index if question_bank_id is provided
+    if question_bank_id:
+        try:
+            question_bank = QuestionBank.objects.get(pk=question_bank_id)
+            similarity_service.build_index_from_db(question_bank_id)
+        except QuestionBank.DoesNotExist:
+            return Response(
+                {"error": f"Question bank with id {question_bank_id} does not exist"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+    else:
+        # Use all questions if no question bank specified
+        similarity_service.build_index_from_db()
+    
+    # Find similar questions
+    similar_questions = similarity_service.find_similar_questions(
+        question_text, 
+        threshold=threshold
+    )
+    
+    # Get full question details
+    if similar_questions:
+        question_ids = [q['question_id'] for q in similar_questions]
+        questions = Question.objects.filter(id__in=question_ids)
+        
+        # Enrich results with question details
+        for result in similar_questions:
+            question = next((q for q in questions if q.id == result['question_id']), None)
+            if question:
+                result['question_text'] = question.question_text
+                result['question_bank_id'] = question.question_bank_id
+    
+    return Response({
+        "question_text": question_text,
+        "similar_questions": similar_questions,
+        "total_matches": len(similar_questions)
+    }, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def find_similar_question_pairs(request, question_bank_id=None):
+    """
+    Find all pairs of similar questions within a question bank.
+    """
+    threshold = float(request.query_params.get('threshold', 0.85))
+    max_pairs = int(request.query_params.get('max_pairs', 100))
+    
+    # Validate question bank if provided
+    if question_bank_id:
+        try:
+            QuestionBank.objects.get(pk=question_bank_id)
+        except QuestionBank.DoesNotExist:
+            return Response(
+                {"error": f"Question bank with id {question_bank_id} does not exist"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    # Find similar pairs
+    similar_pairs = similarity_service.find_similar_pairs(
+        question_bank_id=question_bank_id,
+        threshold=threshold,
+        max_pairs=max_pairs
+    )
+    
+    return Response(similar_pairs, status=status.HTTP_200_OK)

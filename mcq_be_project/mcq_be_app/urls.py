@@ -41,4 +41,7 @@ urlpatterns = [
     path('courses/<int:course_id>/question-banks/<int:bank_id>/groups/<int:group_id>/questions/', 
          views.question_group_questions, 
          name='question-group-questions'),
+    path('questions/check-similarity/', views.check_question_similarity, name='check_question_similarity'),
+    path('question-banks/<int:question_bank_id>/similar-pairs/', views.find_similar_question_pairs, name='similar_question_pairs'),
+    path('questions/similar-pairs/', views.find_similar_question_pairs, name='all_similar_question_pairs'),
 ]
