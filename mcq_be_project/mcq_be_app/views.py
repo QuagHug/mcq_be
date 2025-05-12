@@ -1,7 +1,7 @@
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes, parser_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
 from rest_framework.permissions import AllowAny
@@ -20,6 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from girth import twopl_mml
 from datetime import datetime
 from .similarity_service import SimilarityService
+from .permissions import IsCourseTeacherOrOwner
 
 # Initialize the similarity service
 similarity_service = SimilarityService()
@@ -43,43 +44,52 @@ def register(request):
 
 # QuestionBank CRUD operations
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_bank_list(request, course_id):
     try:
         course = Course.objects.get(pk=course_id)
-    except Course.DoesNotExist:
-        return Response({'error': 'Course not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == 'GET':
-        parent_id = request.query_params.get('parent_id')
-        if parent_id:
-            # Get children of specific parent
-            question_banks = QuestionBank.objects.filter(course=course, parent_id=parent_id)
-        else:
-            # Get root-level banks (those without parent)
-            question_banks = QuestionBank.objects.filter(course=course, parent=None)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
         
-        serializer = QuestionBankSerializer(question_banks, many=True)
-        return Response(serializer.data)
-
-    elif request.method == 'POST':
-        data = request.data.copy()
-        data['bank_id'] = str(uuid.uuid4())
-        serializer = QuestionBankSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save(
-                created_by=request.user,
-                course=course
-            )
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        if request.method == 'GET':
+            parent_id = request.query_params.get('parent_id')
+            if parent_id:
+                # Get children of specific parent
+                question_banks = QuestionBank.objects.filter(course=course, parent_id=parent_id)
+            else:
+                # Get root-level banks (those without parent)
+                question_banks = QuestionBank.objects.filter(course=course, parent=None)
+            
+            serializer = QuestionBankSerializer(question_banks, many=True)
+            return Response(serializer.data)
+        
+        elif request.method == 'POST':
+            data = request.data.copy()
+            data['bank_id'] = str(uuid.uuid4())
+            serializer = QuestionBankSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save(
+                    created_by=request.user,
+                    course=course
+                )
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Course.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_bank_detail(request, course_id, pk):
     try:
         course = Course.objects.get(pk=course_id)
         question_bank = QuestionBank.objects.get(pk=pk, course=course)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except (Course.DoesNotExist, QuestionBank.DoesNotExist):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -100,11 +110,15 @@ def question_bank_detail(request, course_id, pk):
 
 # Question CRUD operations
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_list(request, course_id, bank_id):
     try:
         course = Course.objects.get(pk=course_id)
         question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except (Course.DoesNotExist, QuestionBank.DoesNotExist):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -155,11 +169,15 @@ def question_list(request, course_id, bank_id):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_detail(request, course_id, bank_id, pk):
     try:
         course = Course.objects.get(pk=course_id)
         question = Question.objects.get(pk=pk, question_bank_id=bank_id, question_bank__course=course)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except (Course.DoesNotExist,Question.DoesNotExist):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -181,47 +199,63 @@ def question_detail(request, course_id, bank_id, pk):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def course_list(request):
+
     if request.method == 'GET':
-        courses = Course.objects.all()
+        # Filter courses to only include those where the user is owner or teacher
+        owned_courses = Course.objects.filter(owner=request.user)
+        teaching_courses = Course.objects.filter(teachers=request.user)
+        
+        # Combine the querysets and remove duplicates
+        courses = (owned_courses | teaching_courses).distinct()
+        
         serializer = CourseSerializer(courses, many=True)
         return Response(serializer.data)
 
     elif request.method == 'POST':
         serializer = CourseSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(created_by=request.user)
+            serializer.save(owner=request.user)  # Set the current user as owner
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
-def course_detail(request, pk):
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
+def course_detail(request, course_id):
     try:
-        course = Course.objects.get(pk=pk)
+        course = Course.objects.get(pk=course_id)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
+        
+        if request.method == 'GET':
+            serializer = CourseSerializer(course)
+            return Response(serializer.data)
+        
+        elif request.method == 'PUT':
+            serializer = CourseSerializer(course, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        elif request.method == 'DELETE':
+            course.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
     except Course.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
-    if request.method == 'GET':
-        serializer = CourseSerializer(course)
-        return Response(serializer.data)
-
-    elif request.method == 'PUT':
-        serializer = CourseSerializer(course, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    elif request.method == 'DELETE':
-        course.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_bulk_create(request, course_id, bank_id):
     try:
         course = Course.objects.get(pk=course_id)
         question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except (Course.DoesNotExist, QuestionBank.DoesNotExist):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -290,7 +324,7 @@ def question_bulk_create(request, course_id, bank_id):
         )
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def generate_questions(request):
     context = request.data.get('context', '')
     
@@ -312,10 +346,14 @@ def generate_questions(request):
         )
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def test_list(request, course_id):
     try:
         course = Course.objects.get(pk=course_id)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except Course.DoesNotExist:
         return Response({'error': 'Course not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -333,10 +371,14 @@ def test_list(request, course_id):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def test_detail(request, course_id, pk):
     try:
         test = Test.objects.get(course_id=course_id, pk=pk)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, test.course):
+            return Response({"detail": "You do not have permission to access this test."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except Test.DoesNotExist:
         return Response({'error': 'Test not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -373,10 +415,14 @@ def test_detail(request, course_id, pk):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def test_add_questions(request, course_id, test_id):
     try:
         test = Test.objects.get(course_id=course_id, pk=test_id)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, test.course):
+            return Response({"detail": "You do not have permission to access this test."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except Test.DoesNotExist:
         return Response({'error': 'Test not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -412,6 +458,7 @@ def test_add_questions(request, course_id, test_id):
     return Response(created_questions, status=status.HTTP_201_CREATED)
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def create_test(request, course_id):
     try:
         # Extract data from request
@@ -429,6 +476,10 @@ def create_test(request, course_id):
         # Validate course exists
         try:
             course = Course.objects.get(id=course_id)
+            # Check object-level permissions
+            if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+                return Response({"detail": "You do not have permission to access this course."}, 
+                               status=status.HTTP_403_FORBIDDEN)
         except Course.DoesNotExist:
             return Response(
                 {'error': 'Course not found'},
@@ -464,11 +515,16 @@ def create_test(request, course_id):
         )
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 @parser_classes([MultiPartParser])
 def upload_test_results(request, course_id, test_id):
     try:
         test = Test.objects.get(course_id=course_id, pk=test_id)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, test.course):
+            return Response({"detail": "You do not have permission to access this test."}, 
+                           status=status.HTTP_403_FORBIDDEN)
+        
         test_questions = Question.objects.filter(
             test_questions__test=test
         ).order_by('test_questions__order')
@@ -721,7 +777,7 @@ def upload_test_results(request, course_id, test_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def test_draft_create(request):
     if request.method == 'DELETE':
         deleted_count, _ = TestDraft.objects.filter(created_by=request.user).delete()
@@ -737,6 +793,10 @@ def test_draft_create(request):
         # Validate course exists
         try:
             course = Course.objects.get(id=course_id)
+            # Check object-level permissions
+            if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+                return Response({"detail": "You do not have permission to access this course."}, 
+                               status=status.HTTP_403_FORBIDDEN)
         except Course.DoesNotExist:
             return Response(
                 {'error': 'Course not found'},
@@ -763,10 +823,14 @@ def test_draft_create(request):
         )
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def test_draft_detail(request, draft_id):
     try:
         draft = TestDraft.objects.get(pk=draft_id, created_by=request.user)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, draft.course):
+            return Response({"detail": "You do not have permission to access this test draft."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except TestDraft.DoesNotExist:
         return Response({'error': 'Test draft not found'}, status=status.HTTP_404_NOT_FOUND)
     
@@ -785,7 +849,7 @@ def test_draft_detail(request, draft_id):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def test_draft_list(request):
     # Get course_id from query params if provided
     course_id = request.query_params.get('course_id')
@@ -799,10 +863,14 @@ def test_draft_list(request):
     return Response(serializer.data)
 
 @api_view(['GET', 'POST', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_taxonomy_mapping(request, question_id):
     try:
         question = Question.objects.get(pk=question_id)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, question.question_bank.course):
+            return Response({"detail": "You do not have permission to access this question."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except Question.DoesNotExist:
         return Response({'error': 'Question not found'}, status=status.HTTP_404_NOT_FOUND)
     
@@ -870,11 +938,15 @@ def question_taxonomy_mapping(request, question_id):
             return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['PUT'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def update_test(request, course_id, test_id):
     try:
         # Get test and verify it belongs to the course
         test = Test.objects.get(pk=test_id, course_id=course_id)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, test.course):
+            return Response({"detail": "You do not have permission to access this test."}, 
+                           status=status.HTTP_403_FORBIDDEN)
         
         # Update basic test info
         test.title = request.data.get('title', test.title)
@@ -905,11 +977,15 @@ def update_test(request, course_id, test_id):
         return Response({'error': 'One or more questions not found'}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_group_list(request, course_id, bank_id):
     try:
         course = Course.objects.get(pk=course_id)
         question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except (Course.DoesNotExist, QuestionBank.DoesNotExist):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -928,12 +1004,16 @@ def question_group_list(request, course_id, bank_id):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_group_detail(request, course_id, bank_id, pk):
     try:
         course = Course.objects.get(pk=course_id)
         question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
         question_group = QuestionGroup.objects.get(pk=pk, question_bank=question_bank)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except (Course.DoesNotExist, QuestionBank.DoesNotExist, QuestionGroup.DoesNotExist):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -953,12 +1033,16 @@ def question_group_detail(request, course_id, bank_id, pk):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def question_group_questions(request, course_id, bank_id, group_id):
     try:
         course = Course.objects.get(pk=course_id)
         question_bank = QuestionBank.objects.get(pk=bank_id, course=course)
         question_group = QuestionGroup.objects.get(pk=group_id, question_bank=question_bank)
+        # Check object-level permissions
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({"detail": "You do not have permission to access this course."}, 
+                           status=status.HTTP_403_FORBIDDEN)
     except (Course.DoesNotExist, QuestionBank.DoesNotExist, QuestionGroup.DoesNotExist):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -967,7 +1051,7 @@ def question_group_questions(request, course_id, bank_id, group_id):
     return Response(serializer.data)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def check_question_similarity(request):
     """
     Check if a question is similar to existing questions in the database.
@@ -1021,7 +1105,7 @@ def check_question_similarity(request):
     }, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
 def find_similar_question_pairs(request, question_bank_id=None):
     """
     Find all pairs of similar questions within a question bank.

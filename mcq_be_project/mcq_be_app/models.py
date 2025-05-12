@@ -29,9 +29,14 @@ def create_user_profile(sender, instance, created, **kwargs):
 class Course(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(null=True, blank=True)
-    course_id = models.CharField(max_length=100, default="CO0000", unique=True)
+    course_id = models.CharField(max_length=255, unique=True)
     image_url = models.URLField(null=True, blank=True)
-    owner = models.ForeignKey(User, on_delete=models.CASCADE)
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="owned_courses"
+    )
+    teachers = models.ManyToManyField(
+        User, related_name="associated_courses", blank=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
