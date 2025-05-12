@@ -1,18 +1,21 @@
-name: Docker Image CI
-
+name: Build and Publish image to Docker Hub
 on:
   push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+    branches:
+      - master
+    paths:
+      - 'mcq_be_project/Dockerfile'
 
 jobs:
-
-  build:
-
+  publish_images:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: build image
+        run: |
+          docker build ./mcq_be_project/ -t hungluu1111/mcq-be:tagname
+      - name: push image to docker hub
+        run: |
+          docker login -u hungluu1111 -p ${{ secrets.DOCKER_HUB_TOKEN }}
+          docker push hungluu1111/mcq-be:tagname
