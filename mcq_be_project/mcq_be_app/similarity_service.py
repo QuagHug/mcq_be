@@ -180,3 +180,116 @@ class SimilarityService:
         # Sort by similarity (highest first)
         similar_pairs.sort(key=lambda x: x['similarity'], reverse=True)
         return similar_pairs
+
+    def compare_tests(
+        self,
+        test1_questions: List[Dict],
+        test2_questions: List[Dict],
+        similarity_threshold: float = 0.75
+    ) -> Dict:
+        """
+        Calculate the similarity between two tests based on their questions.
+        
+        Args:
+            test1_questions: List of question dictionaries from first test
+            test2_questions: List of question dictionaries from second test
+            similarity_threshold: Threshold to consider questions as similar (0.0-1.0)
+            
+        Returns:
+            Dict containing:
+                - overall_similarity: Float representing overall test similarity (0.0-1.0)
+                - similar_question_pairs: List of pairs of similar questions
+                - similarity_metrics: Additional similarity metrics
+        """
+        # Initialize results
+        similar_question_pairs = []
+        similarity_scores = []
+        
+        # Validate inputs
+        if not test1_questions or not test2_questions:
+            logger.warning("One or both test question lists are empty")
+            return {
+                'overall_similarity': 0.0,
+                'similar_question_pairs': [],
+                'similarity_metrics': {
+                    'max_similarity': 0.0,
+                    'similar_question_count': 0,
+                    'question_coverage': 0.0,
+                    'average_similarity': 0.0
+                }
+            }
+        
+        # Generate embeddings for all questions in both tests
+        test1_texts = [q.get('question_text', '') for q in test1_questions if q.get('question_text')]
+        test2_texts = [q.get('question_text', '') for q in test2_questions if q.get('question_text')]
+        
+        if not test1_texts or not test2_texts:
+            logger.warning("No valid question texts found in one or both tests")
+            return {
+                'overall_similarity': 0.0,
+                'similar_question_pairs': [],
+                'similarity_metrics': {
+                    'max_similarity': 0.0,
+                    'similar_question_count': 0,
+                    'question_coverage': 0.0,
+                    'average_similarity': 0.0
+                }
+            }
+        
+        test1_embeddings = self.model.encode(test1_texts, convert_to_numpy=True)
+        test2_embeddings = self.model.encode(test2_texts, convert_to_numpy=True)
+        
+        # Calculate similarity between each pair of questions
+        for i, (embed1, text1) in enumerate(zip(test1_embeddings, test1_texts)):
+            for j, (embed2, text2) in enumerate(zip(test2_embeddings, test2_texts)):
+                # Calculate cosine similarity
+                norm1 = np.linalg.norm(embed1)
+                norm2 = np.linalg.norm(embed2)
+                
+                if norm1 > 0 and norm2 > 0:  # Avoid division by zero
+                    similarity = float(np.dot(embed1, embed2) / (norm1 * norm2))
+                    similarity_scores.append(similarity)
+                    
+                    # If similarity exceeds threshold, record the pair
+                    if similarity >= similarity_threshold:
+                        similar_question_pairs.append({
+                            'test1_question_index': i,
+                            'test1_question_text': text1,
+                            'test1_question_id': test1_questions[i].get('id'),
+                            'test2_question_index': j,
+                            'test2_question_text': text2,
+                            'test2_question_id': test2_questions[j].get('id'),
+                            'similarity_score': round(similarity, 4)
+                        })
+        
+        # Calculate overall similarity metrics
+        if similarity_scores:
+            overall_similarity = sum(similarity_scores) / len(similarity_scores)
+            max_similarity = max(similarity_scores) if similarity_scores else 0
+            similar_question_count = len(similar_question_pairs)
+            total_possible_pairs = len(test1_texts) * len(test2_texts)
+            similar_pair_ratio = similar_question_count / total_possible_pairs if total_possible_pairs > 0 else 0
+            question_coverage = similar_question_count / min(len(test1_texts), len(test2_texts))
+        else:
+            overall_similarity = 0
+            max_similarity = 0
+            similar_question_count = 0
+            similar_pair_ratio = 0
+            question_coverage = 0
+        
+        # Sort similar pairs by similarity score (highest first)
+        similar_question_pairs.sort(key=lambda x: x['similarity_score'], reverse=True)
+        
+        # Return results
+        return {
+            'overall_similarity': round(float(overall_similarity), 4),
+            'similar_question_pairs': similar_question_pairs,
+            'similarity_metrics': {
+                'max_similarity': round(float(max_similarity), 4),
+                'similar_question_count': similar_question_count,
+                'similar_pair_ratio': round(float(similar_pair_ratio), 4),
+                'question_coverage': round(float(question_coverage), 4),
+                'total_questions_test1': len(test1_texts),
+                'total_questions_test2': len(test2_texts)
+            }
+        }

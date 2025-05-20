@@ -269,3 +269,246 @@ class AIService:
                 break
         
         return issues
+
+    def generate_distractors(
+        self,
+        question_text: str,
+        correct_answer: str,
+        difficulty_distribution: Dict[str, int] = None,
+        num_distractors: int = 3,
+        difficulty: str = "medium",
+    ) -> List[Dict]:
+        """
+        Generate plausible distractors for a given question and correct answer.
+        
+        Args:
+            question_text: The question text
+            correct_answer: The correct answer
+            difficulty_distribution: Dictionary mapping difficulty levels to number of distractors
+                                    (e.g., {"easy": 2, "medium": 2, "hard": 1})
+            num_distractors: Total number of distractors if difficulty_distribution not provided
+            difficulty: Default difficulty level if difficulty_distribution not provided
+            
+        Returns:
+            List of distractor dictionaries with answer_text, explanation, and difficulty
+        """
+        # If difficulty distribution is provided, use it instead of num_distractors and difficulty
+        if difficulty_distribution:
+            all_distractors = []
+            
+            # Generate distractors for each difficulty level
+            for diff_level, count in difficulty_distribution.items():
+                if count <= 0:
+                    continue
+                    
+                prompt = self._create_distractor_prompt(
+                    question_text, correct_answer, count, diff_level
+                )
+                
+                distractors = self._generate_distractors_with_prompt(prompt)
+                
+                # Add difficulty level to each distractor
+                for distractor in distractors:
+                    distractor["difficulty"] = diff_level
+                    
+                all_distractors.extend(distractors)
+                
+            return all_distractors
+        else:
+            # Use the original implementation for backward compatibility
+            prompt = self._create_distractor_prompt(
+                question_text, correct_answer, num_distractors, difficulty
+            )
+            
+            distractors = self._generate_distractors_with_prompt(prompt)
+            
+            # Add difficulty level to each distractor
+            for distractor in distractors:
+                distractor["difficulty"] = difficulty
+                
+            return distractors
+
+    def _create_distractor_prompt(
+        self, question_text: str, correct_answer: str, num_distractors: int, difficulty: str
+    ) -> str:
+        """Create a prompt for generating distractors with specific difficulty."""
+        return f"""
+        Based on the following question and correct answer, generate {num_distractors} plausible but incorrect answer options (distractors):
+        
+        Question: {question_text}
+        Correct Answer: {correct_answer}
+        Difficulty: {difficulty}
+        
+        Format the distractors as a JSON array with the following structure:
+        [
+            {{"answer_text": "Distractor 1", "explanation": "Why this is wrong"}},
+            {{"answer_text": "Distractor 2", "explanation": "Why this is wrong"}},
+            {{"answer_text": "Distractor 3", "explanation": "Why this is wrong"}}
+        ]
+        
+        Please ensure:
+        1. Each distractor is clearly incorrect but plausible
+        2. Distractors are distinct from each other and from the correct answer
+        3. Explanations clearly state why the distractor is incorrect
+        4. Distractors match the grammatical structure of the correct answer
+        5. Difficulty level ({difficulty}) is reflected in how plausible/tricky the distractors are:
+           - Easy: Obviously wrong to most students but still relevant to the topic
+           - Medium: Plausible but clearly incorrect with careful thought
+           - Hard: Very plausible and requires deep understanding to recognize as incorrect
+        """
+
+    def _generate_distractors_with_prompt(self, prompt: str) -> List[Dict]:
+        """Generate distractors using the given prompt."""
+        response = self.client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert teacher creating plausible distractors for multiple choice questions. Always return response in a JSON array format.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+        )
+
+        try:
+            # Clean the response content
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```json"):
+                content = content[7:]  # Remove ```json
+            if content.endswith("```"):
+                content = content[:-3]  # Remove ```
+            content = content.strip()
+
+            # Parse the cleaned JSON
+            distractors = json.loads(content)
+
+            # Ensure we always return a list
+            if isinstance(distractors, dict):
+                distractors = [distractors]
+
+            # Validate the structure of distractors
+            validated_distractors = self._validate_distractors(distractors)
+
+            return validated_distractors
+
+        except json.JSONDecodeError as e:
+            print(f"JSON Decode Error: {str(e)}")
+            print(f"Raw Content: {content}")
+            raise ValueError(f"Failed to parse AI response into valid JSON: {str(e)}")
+        except Exception as e:
+            print(f"Unexpected Error: {str(e)}")
+            raise ValueError(f"Error processing AI response: {str(e)}")
+
+    def _validate_distractors(self, distractors: List[Dict]) -> List[Dict]:
+        """
+        Validate the structure and quality of AI-generated distractors.
+        
+        Args:
+            distractors: List of distractor dictionaries from the AI
+            
+        Returns:
+            List of validated distractors
+        """
+        validated_distractors = []
+        
+        for distractor in distractors:
+            # Initialize metadata
+            if "metadata" not in distractor:
+                distractor["metadata"] = {}
+            
+            # Check structure validity
+            structure_valid = self._validate_distractor_structure(distractor)
+            distractor["metadata"]["structure_valid"] = structure_valid
+            
+            if not structure_valid:
+                print(f"Structure issues in distractor: {distractor.get('answer_text', '')}")
+                distractor["metadata"]["structure_issues"] = self._get_distractor_structure_issues(distractor)
+            
+            # Check quality criteria (even for structurally invalid distractors)
+            quality_issues = self._check_distractor_quality(distractor)
+            if quality_issues:
+                print(f"Quality issues in distractor: {distractor.get('answer_text', '')}")
+                print(f"Issues: {', '.join(quality_issues)}")
+                distractor["metadata"]["quality_issues"] = quality_issues
+            
+            # Add is_correct flag (always false for distractors)
+            distractor["is_correct"] = False
+            
+            validated_distractors.append(distractor)
+        
+        return validated_distractors
+
+    def _validate_distractor_structure(self, distractor: Dict) -> bool:
+        """
+        Validate that a distractor has the expected structure.
+        
+        Returns:
+            bool: True if structure is valid, False otherwise
+        """
+        # Check for required fields
+        required_fields = ["answer_text", "explanation"]
+        for field in required_fields:
+            if field not in distractor:
+                return False
+        
+        # Check that answer_text is not empty
+        if not distractor.get("answer_text", "").strip():
+            return False
+        
+        # Check that explanation is not empty
+        if not distractor.get("explanation", "").strip():
+            return False
+        
+        return True
+
+    def _get_distractor_structure_issues(self, distractor: Dict) -> List[str]:
+        """
+        Identify specific structure issues with a distractor.
+        
+        Returns:
+            List of structure issues found
+        """
+        issues = []
+        
+        # Check for required fields
+        required_fields = ["answer_text", "explanation"]
+        for field in required_fields:
+            if field not in distractor:
+                issues.append(f"Missing required field: {field}")
+        
+        # Check that answer_text is not empty
+        if "answer_text" in distractor and not distractor["answer_text"].strip():
+            issues.append("Answer text is empty")
+        
+        # Check that explanation is not empty
+        if "explanation" in distractor and not distractor["explanation"].strip():
+            issues.append("Explanation is empty")
+        
+        return issues
+
+    def _check_distractor_quality(self, distractor: Dict) -> List[str]:
+        """
+        Check the quality of a distractor based on various criteria.
+        
+        Returns:
+            List of quality issues found (empty if no issues)
+        """
+        issues = []
+        
+        # Check answer text length
+        answer_text = distractor.get("answer_text", "")
+        if len(answer_text) < 2:
+            issues.append("Answer text is too short")
+        
+        # Check explanation quality
+        explanation = distractor.get("explanation", "")
+        if len(explanation) < 10:
+            issues.append("Explanation is too short")
+        
+        # Check for generic explanations
+        generic_phrases = ["this is incorrect", "this is wrong", "not the right answer"]
+        if any(phrase in explanation.lower() for phrase in generic_phrases) and len(explanation) < 30:
+            issues.append("Explanation is too generic")
+        
+        return issues

@@ -1131,3 +1131,454 @@ def find_similar_question_pairs(request, question_bank_id=None):
     )
     
     return Response(similar_pairs, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
+def generate_distractors(request):
+    """
+    Generate plausible distractors for a given question and correct answer.
+    
+    Supports either:
+    - num_distractors + difficulty: Generate a specific number of distractors at one difficulty level
+    - difficulty_distribution: Generate distractors with different difficulty levels
+      (e.g., {"easy": 2, "medium": 2, "hard": 1})
+    """
+    question_text = request.data.get('question_text', '')
+    correct_answer = request.data.get('correct_answer', '')
+    difficulty_distribution = request.data.get('difficulty_distribution')
+    num_distractors = request.data.get('num_distractors', 3)
+    difficulty = request.data.get('difficulty', 'medium')
+    
+    if not question_text or not correct_answer:
+        return Response(
+            {"error": "Question text and correct answer are required"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Validate difficulty distribution if provided
+    if difficulty_distribution:
+        if not isinstance(difficulty_distribution, dict):
+            return Response(
+                {"error": "difficulty_distribution must be a dictionary"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        valid_difficulties = ['easy', 'medium', 'hard']
+        for diff, count in difficulty_distribution.items():
+            if diff not in valid_difficulties:
+                return Response(
+                    {"error": f"Invalid difficulty level: {diff}. Must be one of {valid_difficulties}"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not isinstance(count, int) or count < 0:
+                return Response(
+                    {"error": f"Count for {diff} must be a non-negative integer"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+    
+    try:
+        ai_service = AIService()
+        distractors = ai_service.generate_distractors(
+            question_text=question_text,
+            correct_answer=correct_answer,
+            difficulty_distribution=difficulty_distribution,
+            num_distractors=num_distractors,
+            difficulty=difficulty
+        )
+        
+        # Format the response to include both the correct answer and distractors
+        response_data = {
+            "question_text": question_text,
+            "correct_answer": {
+                "answer_text": correct_answer,
+                "is_correct": True,
+                "explanation": request.data.get('explanation', "This is the correct answer"),
+                "difficulty": "correct"
+            },
+            "distractors": distractors
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
+def add_distractors_to_question(request, question_id):
+    """
+    Add generated distractors to an existing question in the database.
+    
+    Expected request body:
+    {
+        "distractors": [
+            {
+                "answer_text": "Distractor 1",
+                "explanation": "Why this is wrong",
+                "difficulty": "medium"
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        question = Question.objects.get(pk=question_id)
+        
+        # Check permissions
+        course = question.question_bank.course
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response(
+                {"error": "You do not have permission to modify this question"}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get distractors from request
+        distractors = request.data.get('distractors', [])
+        if not distractors or not isinstance(distractors, list):
+            return Response(
+                {"error": "Distractors must be provided as a list"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Save distractors to database
+        created_answers = []
+        with transaction.atomic():
+            for distractor in distractors:
+                # Extract fields
+                answer_text = distractor.get('answer_text')
+                explanation = distractor.get('explanation', '')
+                difficulty = distractor.get('difficulty', 'medium')
+                
+                if not answer_text:
+                    continue
+           
+                # Create the answer
+                answer = Answer.objects.create(
+                    question=question,
+                    answer_text=answer_text,
+                    is_correct=False,
+                    explanation=explanation
+                )
+                created_answers.append(answer)
+        
+        # Return the updated question with all answers
+        question_serializer = QuestionSerializer(question)
+        
+        return Response({
+            'message': f'Successfully added {len(created_answers)} distractors to question',
+            'question': question_serializer.data
+        }, status=status.HTTP_200_OK)
+        
+    except Question.DoesNotExist:
+        return Response(
+            {"error": f"Question with id {question_id} does not exist"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
+def compare_tests(request):
+    """
+    Compare two tests for similarity.
+    
+    Expected request body:
+    {
+        "test1_id": 123,
+        "test2_id": 456,
+        "similarity_threshold": 0.75  # optional
+    }
+    
+    Or to compare by question lists:
+    {
+        "test1_questions": [{...}, {...}],
+        "test2_questions": [{...}, {...}],
+        "similarity_threshold": 0.75  # optional
+    }
+    """
+    # Get parameters
+    test1_id = request.data.get('test1_id')
+    test2_id = request.data.get('test2_id')
+    test1_questions = request.data.get('test1_questions')
+    test2_questions = request.data.get('test2_questions')
+    similarity_threshold = float(request.data.get('similarity_threshold', 0.75))
+    
+    # Validate that we have either test IDs or question lists
+    if not ((test1_id and test2_id) or (test1_questions and test2_questions)):
+        return Response({
+            "error": "You must provide either test IDs or question lists for comparison"
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        # If test IDs are provided, fetch the questions
+        if test1_id and test2_id:
+            try:
+                test1 = Test.objects.get(pk=test1_id)
+                test2 = Test.objects.get(pk=test2_id)
+                
+                # Check permissions
+                if not request.user.is_staff:
+                    course1 = test1.course
+                    course2 = test2.course
+                    if not (IsCourseTeacherOrOwner().has_object_permission(request, None, course1) and
+                            IsCourseTeacherOrOwner().has_object_permission(request, None, course2)):
+                        return Response({
+                            "error": "You do not have permission to access one or both tests"
+                        }, status=status.HTTP_403_FORBIDDEN)
+                
+                # Get questions from tests
+                test1_questions = list(Question.objects.filter(
+                    test_questions__test=test1
+                ).values('id', 'question_text'))
+                
+                test2_questions = list(Question.objects.filter(
+                    test_questions__test=test2
+                ).values('id', 'question_text'))
+                
+            except Test.DoesNotExist:
+                return Response({
+                    "error": "One or both test IDs are invalid"
+                }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Calculate similarity
+        similarity_result = similarity_service.compare_tests(
+            test1_questions=test1_questions,
+            test2_questions=test2_questions,
+            similarity_threshold=similarity_threshold
+        )
+        
+        # Add test information to the response
+        if test1_id and test2_id:
+            similarity_result['test1'] = {
+                'id': test1_id,
+                'title': test1.title,
+                'question_count': len(test1_questions)
+            }
+            similarity_result['test2'] = {
+                'id': test2_id,
+                'title': test2.title,
+                'question_count': len(test2_questions)
+            }
+        else:
+            similarity_result['test1'] = {
+                'question_count': len(test1_questions)
+            }
+            similarity_result['test2'] = {
+                'question_count': len(test2_questions)
+            }
+        
+        return Response(similarity_result, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            "error": str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
+def find_similar_tests(request, test_id):
+    """
+    Find tests that are similar to the specified test within the same question bank.
+    
+    Query parameters:
+    - threshold: Similarity threshold (default: 0.75)
+    - max_results: Maximum number of similar tests to return (default: 5)
+    """
+    try:
+        # Get parameters
+        threshold = float(request.query_params.get('threshold', 0.75))
+        max_results = int(request.query_params.get('max_results', 5))
+        
+        # Get the test and check permissions
+        test = Test.objects.get(pk=test_id)
+        course = test.course
+        
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({
+                "error": "You do not have permission to access this test"
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get questions from the target test
+        test_questions = list(Question.objects.filter(
+            test_questions__test=test
+        ).values('id', 'question_text'))
+        
+        # Find other tests in the same course
+        other_tests = Test.objects.filter(course=course).exclude(pk=test_id)
+        
+        similar_tests = []
+        
+        # Compare with each other test
+        for other_test in other_tests:
+            other_test_questions = list(Question.objects.filter(
+                test_questions__test=other_test
+            ).values('id', 'question_text'))
+            
+            if not other_test_questions:
+                continue
+            
+            # Calculate similarity
+            similarity_result = similarity_service.compare_tests(
+                test1_questions=test_questions,
+                test2_questions=other_test_questions,
+                similarity_threshold=threshold
+            )
+            
+            # Add to results if there's meaningful similarity
+            if similarity_result['overall_similarity'] > threshold:
+                # Get the actual list of unique questions from test1 and test2 that appear in similar pairs
+                unique_test1_questions = set()
+                unique_test2_questions = set()
+                
+                for pair in similarity_result['similar_question_pairs']:
+                    if pair.get('test1_question_id'):
+                        unique_test1_questions.add(pair['test1_question_id'])
+                    if pair.get('test2_question_id'):
+                        unique_test2_questions.add(pair['test2_question_id'])
+                
+                similar_tests.append({
+                    'test_id': other_test.id,
+                    'test_title': other_test.title,
+                    'similarity_score': similarity_result['overall_similarity'],
+                    'similar_question_count': len(unique_test2_questions),  # Count of unique questions in other test that have similarities
+                    'total_questions': len(other_test_questions),
+                    'question_coverage': len(unique_test2_questions) / len(other_test_questions) if len(other_test_questions) > 0 else 0
+                })
+        
+        # Sort by similarity (highest first)
+        similar_tests.sort(key=lambda x: x['similarity_score'], reverse=True)
+        
+        # Limit results
+        similar_tests = similar_tests[:max_results]
+        
+        return Response({
+            'test_id': test_id,
+            'test_title': test.title,
+            'total_questions': len(test_questions),
+            'similar_tests': similar_tests,
+            'total_similar_tests': len(similar_tests)
+        }, status=status.HTTP_200_OK)
+        
+    except Test.DoesNotExist:
+        return Response({
+            "error": f"Test with id {test_id} does not exist"
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({
+            "error": str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsCourseTeacherOrOwner])
+def check_test_similarity_before_creation(request, course_id):
+    """
+    Check if the questions a user is about to add to a new test
+    are similar to any existing tests in the course.
+    
+    Expected request body:
+    {
+        "question_ids": [1, 2, 3, ...],
+        "threshold": 0.75,  # optional
+        "max_results": 5    # optional
+    }
+    """
+    # Get parameters
+    question_ids = request.data.get('question_ids', [])
+    threshold = float(request.data.get('threshold', 0.75))
+    max_results = int(request.data.get('max_results', 5))
+    
+    # Validate input
+    if not question_ids:
+        return Response({
+            "error": "Please provide question IDs to check for similar tests"
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        # Get course and check permissions
+        course = Course.objects.get(pk=course_id)
+        if not IsCourseTeacherOrOwner().has_object_permission(request, None, course):
+            return Response({
+                "error": "You do not have permission to access this course"
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get the questions being considered for the new test
+        candidate_questions = list(Question.objects.filter(
+            id__in=question_ids
+        ).values('id', 'question_text'))
+        
+        # If some questions weren't found, note them
+        found_ids = [q['id'] for q in candidate_questions]
+        missing_ids = [qid for qid in question_ids if qid not in found_ids]
+        
+        # Find all tests in the course
+        existing_tests = Test.objects.filter(course=course)
+        
+        similar_tests = []
+        
+        # Compare with each existing test
+        for existing_test in existing_tests:
+            existing_test_questions = list(Question.objects.filter(
+                test_questions__test=existing_test
+            ).values('id', 'question_text'))
+            
+            if not existing_test_questions:
+                continue
+            
+            # Calculate similarity
+            similarity_result = similarity_service.compare_tests(
+                test1_questions=candidate_questions,
+                test2_questions=existing_test_questions,
+                similarity_threshold=threshold
+            )
+            
+            # Add to results if there's meaningful similarity
+            if similarity_result['overall_similarity'] > threshold:
+                # Get the actual list of unique questions from both tests that appear in similar pairs
+                unique_candidate_questions = set()
+                unique_existing_questions = set()
+                
+                for pair in similarity_result['similar_question_pairs']:
+                    if pair.get('test1_question_id'):
+                        unique_candidate_questions.add(pair['test1_question_id'])
+                    if pair.get('test2_question_id'):
+                        unique_existing_questions.add(pair['test2_question_id'])
+                
+                similar_tests.append({
+                    'test_id': existing_test.id,
+                    'test_title': existing_test.title,
+                    'similarity_score': similarity_result['overall_similarity'],
+                    'similar_question_count': len(unique_existing_questions),  # Count of unique questions with similarities
+                    'total_questions_in_existing_test': len(existing_test_questions),
+                    'question_coverage': len(unique_existing_questions) / len(existing_test_questions) if len(existing_test_questions) > 0 else 0,
+                    'similar_question_pairs': similarity_result['similar_question_pairs'][:5]  # Limit number of pairs returned
+                })
+        
+        # Sort by similarity (highest first)
+        similar_tests.sort(key=lambda x: x['similarity_score'], reverse=True)
+        
+        # Limit results
+        similar_tests = similar_tests[:max_results]
+        
+        return Response({
+            'candidate_questions_count': len(candidate_questions),
+            'missing_question_ids': missing_ids if missing_ids else None,
+            'similar_tests': similar_tests,
+            'total_similar_tests': len(similar_tests)
+        }, status=status.HTTP_200_OK)
+        
+    except Course.DoesNotExist:
+        return Response({
+            "error": f"Course with id {course_id} does not exist"
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({
+            "error": str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
