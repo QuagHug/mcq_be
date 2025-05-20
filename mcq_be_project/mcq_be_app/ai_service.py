@@ -305,7 +305,7 @@ class AIService:
                     question_text, correct_answer, count, diff_level
                 )
                 
-                distractors = self._generate_distractors_with_prompt(prompt)
+                distractors = self._generate_distractors_with_prompt(prompt, max_distractors=count)
                 
                 # Add difficulty level to each distractor
                 for distractor in distractors:
@@ -320,7 +320,7 @@ class AIService:
                 question_text, correct_answer, num_distractors, difficulty
             )
             
-            distractors = self._generate_distractors_with_prompt(prompt)
+            distractors = self._generate_distractors_with_prompt(prompt, max_distractors=num_distractors)
             
             # Add difficulty level to each distractor
             for distractor in distractors:
@@ -332,32 +332,38 @@ class AIService:
         self, question_text: str, correct_answer: str, num_distractors: int, difficulty: str
     ) -> str:
         """Create a prompt for generating distractors with specific difficulty."""
+        # Create example JSON with exactly the requested number of distractors
+        example_json = "[\n"
+        for i in range(num_distractors):
+            example_json += f'    {{"answer_text": "Distractor {i+1}", "explanation": "Why this is wrong"}}'
+            if i < num_distractors - 1:
+                example_json += ","
+            example_json += "\n"
+        example_json += "]"
+        
         return f"""
-        Based on the following question and correct answer, generate {num_distractors} plausible but incorrect answer options (distractors):
+        Based on the following question and correct answer, generate EXACTLY {num_distractors} plausible but incorrect answer options (distractors):
         
         Question: {question_text}
         Correct Answer: {correct_answer}
         Difficulty: {difficulty}
         
         Format the distractors as a JSON array with the following structure:
-        [
-            {{"answer_text": "Distractor 1", "explanation": "Why this is wrong"}},
-            {{"answer_text": "Distractor 2", "explanation": "Why this is wrong"}},
-            {{"answer_text": "Distractor 3", "explanation": "Why this is wrong"}}
-        ]
+        {example_json}
         
         Please ensure:
-        1. Each distractor is clearly incorrect but plausible
-        2. Distractors are distinct from each other and from the correct answer
-        3. Explanations clearly state why the distractor is incorrect
-        4. Distractors match the grammatical structure of the correct answer
-        5. Difficulty level ({difficulty}) is reflected in how plausible/tricky the distractors are:
+        1. Generate EXACTLY {num_distractors} distractor(s), no more and no less
+        2. Each distractor is clearly incorrect but plausible
+        3. Distractors are distinct from each other and from the correct answer
+        4. Explanations clearly state why the distractor is incorrect
+        5. Distractors match the grammatical structure of the correct answer
+        6. Difficulty level ({difficulty}) is reflected in how plausible/tricky the distractors are:
            - Easy: Obviously wrong to most students but still relevant to the topic
            - Medium: Plausible but clearly incorrect with careful thought
            - Hard: Very plausible and requires deep understanding to recognize as incorrect
         """
 
-    def _generate_distractors_with_prompt(self, prompt: str) -> List[Dict]:
+    def _generate_distractors_with_prompt(self, prompt: str, max_distractors: int = None) -> List[Dict]:
         """Generate distractors using the given prompt."""
         response = self.client.chat.completions.create(
             model="gpt-4",
@@ -386,6 +392,10 @@ class AIService:
             # Ensure we always return a list
             if isinstance(distractors, dict):
                 distractors = [distractors]
+
+            # Limit the number of distractors if specified
+            if max_distractors is not None and len(distractors) > max_distractors:
+                distractors = distractors[:max_distractors]
 
             # Validate the structure of distractors
             validated_distractors = self._validate_distractors(distractors)
